@@ -2,18 +2,14 @@
 //!
 //! Pure capabilities and data models for homelab automation.
 
-/// Data models for the homelab.
-pub mod models;
-
-/// Driver traits for external systems.
-pub mod traits;
-
-/// Capability modules (e.g. proxmox, opnsense).
-pub mod capabilities;
-
-pub mod analysis;
-/// Orchestration and analysis.
-pub mod orchestrator;
-
-/// Error definitions.
+pub mod client;
+pub mod config;
 pub mod error;
+pub mod models;
+pub mod tools;
+
+pub use client::HomelabClient;
+pub use config::Config;
+pub use error::{HomelabError, Result};
+pub use models::*;
+pub use tools::*;

@@ -3,9 +3,7 @@ resolver = "2"
 
 members = [
     "crates/homelab-core",
-    "crates/homelab-ops",
     "crates/homelab-mcp",
-    "crates/homelab-discord",
 ]
 
 [workspace.dependencies]
@@ -25,6 +23,7 @@ thiserror = "1.0"
 # HTTP & Network
 reqwest = { version = "0.11", features = ["json"] }
 ipnet = "2.0"
+toml = "0.8"
 
 # Utilities
 derive_more = "0.99"
