@@ -11,7 +11,7 @@ struct TestResponse {
 }
 
 #[tokio::test]
-async fn test_fetch_endpoint_success() {
+async fn test_get_json_success() {
     // 1. Start a mock server
     let mock_server = MockServer::start().await;
 
@@ -32,8 +32,9 @@ async fn test_fetch_endpoint_success() {
         "mock_endpoint".to_string(),
         EndpointConfig {
             name: "mock_endpoint".to_string(),
-            url: format!("{}/test", mock_server.uri()),
+            url: mock_server.uri(),
             auth: AuthConfig::None,
+            tls_insecure: false,
         },
     );
 
@@ -43,14 +44,17 @@ async fn test_fetch_endpoint_success() {
     let client = HomelabClient::new(config);
 
     // 5. Execute the request
-    let result: TestResponse = client.fetch_endpoint("mock_endpoint").await.expect("Failed to fetch");
+    let result: TestResponse = client
+        .get_json("mock_endpoint", "/test")
+        .await
+        .expect("Failed to fetch");
 
     // 6. Assert the result
     assert_eq!(result.message, "hello from mock");
 }
 
 #[tokio::test]
-async fn test_fetch_endpoint_api_token_auth() {
+async fn test_get_json_api_token_auth() {
     // 1. Start a mock server
     let mock_server = MockServer::start().await;
 
@@ -80,11 +84,12 @@ async fn test_fetch_endpoint_api_token_auth() {
         "proxmox".to_string(),
         EndpointConfig {
             name: "proxmox".to_string(),
-            url: format!("{}/api/nodes", mock_server.uri()),
+            url: mock_server.uri(),
             auth: AuthConfig::ApiToken {
                 id_env: id_var.to_string(),
                 secret_env: secret_var.to_string(),
             },
+            tls_insecure: false,
         },
     );
 
@@ -94,7 +99,10 @@ async fn test_fetch_endpoint_api_token_auth() {
     let client = HomelabClient::new(config);
 
     // 6. Execute the request
-    let result: serde_json::Value = client.fetch_endpoint("proxmox").await.expect("Failed to fetch with token");
+    let result: serde_json::Value = client
+        .get_json("proxmox", "/api/nodes")
+        .await
+        .expect("Failed to fetch with token");
 
     // 7. Assert the result
     assert_eq!(result["status"], "ok");

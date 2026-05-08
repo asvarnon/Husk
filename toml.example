@@ -4,6 +4,9 @@
 [[endpoints]]
 name = "proxmox"
 url = "https://<proxmox-ip>:8006"
+# Proxmox commonly uses a self-signed cert in homelabs.
+# Set true only for trusted internal endpoints.
+tls_insecure = true
 [endpoints.auth]
 type = "api-token"
 id_env = "PROXMOX_TOKEN_ID"

@@ -12,5 +12,6 @@ anyhow.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+rmcp = { version = "1.6.0", features = ["server"] }
 # In a real implementation, we'd use a proper MCP crate here.
 # For now, we'll placeholder.

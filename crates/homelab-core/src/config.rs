@@ -8,6 +8,7 @@ use std::path::Path;
 pub enum AuthConfig {
     ApiToken { id_env: String, secret_env: String },
     Basic { user_env: String, pass_env: String },
+    Bearer { token_env: String },
     None,
 }
 
@@ -16,6 +17,8 @@ pub struct EndpointConfig {
     pub url: String,
     pub name: String,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub tls_insecure: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
