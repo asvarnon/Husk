@@ -1,4 +1,6 @@
 /target
 config.toml
+.mcp.json
+.env
+.env.local
 **/*.rs.bk
-```
