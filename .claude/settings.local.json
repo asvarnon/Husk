@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__homelab-rs__scan_nodes",
+      "mcp__homelab-rs__scan_cluster"
+    ]
+  }
+}

@@ -5,3 +5,4 @@ config.toml
 .env.local
 scripts/*.local.ps1
 **/*.rs.bk
+.rules

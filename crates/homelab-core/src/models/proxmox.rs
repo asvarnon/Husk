@@ -20,8 +20,8 @@ pub enum RunState {
 impl From<&str> for RunState {
     fn from(value: &str) -> Self {
         match value {
-            "running" | "online" => Self::Running,
-            "stopped" | "offline" => Self::Stopped,
+            "running" | "online" | "available" | "ok" => Self::Running,
+            "stopped" | "offline" | "unavailable" => Self::Stopped,
             "paused" => Self::Paused,
             "suspended" => Self::Suspended,
             _ => Self::Unknown,
@@ -46,7 +46,9 @@ pub struct VmSummary {
     pub status: RunState,
     pub cpus: u32,
     pub memory_mb: u64,
+    pub max_memory_mb: u64,
     pub node: String,
+    pub uptime_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,7 +58,25 @@ pub struct LxcSummary {
     pub status: RunState,
     pub cpus: u32,
     pub memory_mb: u64,
+    pub uptime_seconds: u64,
+    pub max_memory_mb: u64,
     pub node: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageSummary {
+    pub node: String,
+    pub status: RunState,
+    pub maxdisk: u64,
+    pub disk: u64,
+    pub storage: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SdnSummary {
+    pub status: RunState,
+    pub node: String,
+    pub sdn: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,11 +93,11 @@ pub struct LxcStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClusterSnapshot {
+pub struct ClusterResource {
     pub nodes: Vec<NodeSummary>,
     pub vms: Vec<VmSummary>,
     pub lxcs: Vec<LxcSummary>,
-    pub errors: Vec<ScanError>,
+    // pub errors: Vec<ScanError>,
     pub captured_at: DateTime<Utc>,
 }
 
@@ -86,3 +106,15 @@ pub struct ScanError {
     pub subsystem: String,
     pub message: String,
 }
+
+// #[derive(Debug, Deserialize)]
+// struct ClusterResource {
+//     pub cluster_type: String,
+//     pub node: String,
+//     pub status: String,
+//     pub vmid: Option<u64>,
+//     pub name: Option<String>,
+//     pub maxcpu: f32,
+//     pub mem: u64,
+//     pub maxmem: u64,
+// }

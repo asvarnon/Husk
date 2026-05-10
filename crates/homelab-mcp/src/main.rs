@@ -81,6 +81,30 @@ impl HomelabMcp {
         // MCP response: return one text content block containing JSON.
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(name = "scan_cluster", description = "Scans proxmox cluster")]
+    async fn scan_cluster(&self) -> std::result::Result<CallToolResult, McpError> {
+        // Adapter -> core: call the real domain/tool function.
+        let nodes = proxmox::scan_cluster(&self.client).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to scan clusters: {}", e),
+                None,
+            )
+        })?;
+
+        // Core result -> MCP content: serialize the domain data for the protocol response.
+        let json = serde_json::to_string_pretty(&nodes).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to serialize clusters: {}", e),
+                None,
+            )
+        })?;
+
+        // MCP response: return one text content block containing JSON.
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 // ServerHandler tells rmcp this struct is an MCP server.
