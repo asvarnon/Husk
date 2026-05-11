@@ -79,7 +79,10 @@ impl HomelabMcp {
         })?;
 
         // MCP response: return one text content block containing JSON.
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "```json\n{}\n```",
+            json
+        ))]))
     }
 
     #[tool(name = "scan_cluster", description = "Scans proxmox cluster")]
@@ -103,7 +106,10 @@ impl HomelabMcp {
         })?;
 
         // MCP response: return one text content block containing JSON.
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "```json\n{}\n```",
+            json
+        ))]))
     }
 }
 

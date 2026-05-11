@@ -36,7 +36,7 @@ pub struct NodeSummary {
     pub cpu_usage_percent: f32,
     pub memory_used_mb: u64,
     pub memory_total_mb: u64,
-    pub uptime_seconds: u64,
+    pub uptime: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub struct VmSummary {
     pub memory_mb: u64,
     pub max_memory_mb: u64,
     pub node: String,
-    pub uptime_seconds: u64,
+    pub uptime: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ pub struct LxcSummary {
     pub status: RunState,
     pub cpus: u32,
     pub memory_mb: u64,
-    pub uptime_seconds: u64,
+    pub uptime: String,
     pub max_memory_mb: u64,
     pub node: String,
 }
@@ -84,7 +84,7 @@ pub struct LxcStatus {
     pub vmid: u32,
     pub name: String,
     pub status: RunState,
-    pub uptime_seconds: u64,
+    pub uptime: String,
     pub cpu_usage_percent: f32,
     pub memory_used_mb: u64,
     pub memory_total_mb: u64,
@@ -98,7 +98,7 @@ pub struct ClusterResource {
     pub vms: Vec<VmSummary>,
     pub lxcs: Vec<LxcSummary>,
     // pub errors: Vec<ScanError>,
-    pub captured_at: DateTime<Utc>,
+    pub captured_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

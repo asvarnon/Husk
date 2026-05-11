@@ -4,7 +4,7 @@ use crate::models::proxmox::{
     ClusterResource, LxcSummary, NodeSummary, ProxmoxData, RunState, SdnSummary, StorageSummary,
     VmSummary,
 };
-use chrono::Utc;
+use crate::utils::{get_timestamp_local, seconds_to_human_readable};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +48,7 @@ impl From<RawVm> for VmSummary {
             cpus: value.maxcpu,
             memory_mb: bytes_to_mb(value.mem),
             max_memory_mb: bytes_to_mb(value.maxmem),
-            uptime_seconds: value.uptime,
+            uptime: seconds_to_human_readable(value.uptime),
         }
     }
 }
@@ -79,7 +79,7 @@ impl From<RawLxc> for LxcSummary {
             cpus: value.maxcpu,
             memory_mb: bytes_to_mb(value.mem),
             max_memory_mb: bytes_to_mb(value.maxmem),
-            uptime_seconds: value.uptime,
+            uptime: seconds_to_human_readable(value.uptime),
         }
     }
 }
@@ -106,7 +106,7 @@ impl From<RawNode> for NodeSummary {
             cpu_usage_percent: value.cpu * 100.00,
             memory_used_mb: bytes_to_mb(value.mem),
             memory_total_mb: bytes_to_mb(value.maxmem),
-            uptime_seconds: value.uptime,
+            uptime: seconds_to_human_readable(value.uptime),
         }
     }
 }
@@ -177,7 +177,7 @@ pub async fn scan_nodes(client: &HomelabClient) -> Result<Vec<NodeSummary>> {
             cpu_usage_percent: node.cpu * 100.0,
             memory_used_mb: bytes_to_mb(node.mem),
             memory_total_mb: bytes_to_mb(node.maxmem),
-            uptime_seconds: node.uptime,
+            uptime: seconds_to_human_readable(node.uptime),
         })
         .collect())
 }
@@ -206,7 +206,7 @@ pub async fn scan_cluster(client: &HomelabClient) -> Result<ClusterResource> {
         nodes,
         vms,
         lxcs,
-        captured_at: Utc::now(),
+        captured_at: get_timestamp_local(),
     })
 }
 
