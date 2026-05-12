@@ -106,15 +106,3 @@ pub struct ScanError {
     pub subsystem: String,
     pub message: String,
 }
-
-// #[derive(Debug, Deserialize)]
-// struct ClusterResource {
-//     pub cluster_type: String,
-//     pub node: String,
-//     pub status: String,
-//     pub vmid: Option<u64>,
-//     pub name: Option<String>,
-//     pub maxcpu: f32,
-//     pub mem: u64,
-//     pub maxmem: u64,
-// }
