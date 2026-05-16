@@ -36,6 +36,7 @@ impl HomelabClient {
             endpoint.url.trim_end_matches('/'),
             path.trim_start_matches('/'),
         );
+        dbg!(&url);
 
         let mut request = self.client.get(&url);
 

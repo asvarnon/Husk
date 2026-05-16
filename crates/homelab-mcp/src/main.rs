@@ -47,6 +47,15 @@ pub struct HomelabMcp {
     tool_router: ToolRouter<Self>,
 }
 
+// ServerHandler tells rmcp this struct is an MCP server.
+// #[tool_handler] wires MCP list_tools/call_tool to the router.
+#[tool_handler(
+    name = "homelab-rs",
+    version = "0.1.0",
+    instructions = "Homelab automation tools backed by configured HTTP endpoints."
+)]
+impl ServerHandler for HomelabMcp {}
+
 #[tool_router]
 impl HomelabMcp {
     pub fn new(client: HomelabClient) -> Self {
@@ -112,12 +121,3 @@ impl HomelabMcp {
         ))]))
     }
 }
-
-// ServerHandler tells rmcp this struct is an MCP server.
-// #[tool_handler] wires MCP list_tools/call_tool to the router above.
-#[tool_handler(
-    name = "homelab-rs",
-    version = "0.1.0",
-    instructions = "Homelab automation tools backed by configured HTTP endpoints."
-)]
-impl ServerHandler for HomelabMcp {}

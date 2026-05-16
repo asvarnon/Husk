@@ -19,7 +19,26 @@ pub struct EndpointConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub tls_insecure: bool,
+    // pub tools: Option<Vec<Tool>>, // keeping for possible future runtime toolset config
 }
+
+//KEEPING FOR LATER IF REDESIGN FOR MORE CONFIG DRIVEN RUNTIME TOOLSETS
+// #[derive(Debug, Deserialize, Clone)]
+// struct Tool {
+//     name: String,
+//     module: String,
+//     controller: String,
+//     command: String,
+//     description: String,
+//     parameters: Option<Vec<ToolParam>>,
+// }
+
+// #[derive(Debug, Deserialize, Clone)]
+// struct ToolParam {
+//     name: String,
+//     data_type: String,
+//     required: bool,
+// }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ConfigRaw {

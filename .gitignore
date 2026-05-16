@@ -7,4 +7,5 @@ scripts/*.local.ps1
 **/*.rs.bk
 .rules
 **/*.local.json
+.zed/debug.json
 CLAUDE.md

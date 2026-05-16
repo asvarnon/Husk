@@ -12,3 +12,11 @@ pub fn get_timestamp_local() -> String {
     let formatted = dt1.format("%B %d %Y %r");
     format!("{}", formatted)
 }
+
+pub fn expire_to_hours_remaining(expire: u64) -> String {
+    let now = Local::now().timestamp() as u64;
+    let remaining = expire.saturating_sub(now);
+    let hours = remaining / 3600;
+    let minutes = (remaining % 3600) / 60;
+    format!("{} hours {} minutes remaining", hours, minutes)
+}
