@@ -4,6 +4,7 @@ config.toml
 .env
 .env.local
 scripts/*.local.ps1
+scripts/*.local.sh
 **/*.rs.bk
 .rules
 **/*.local.json
