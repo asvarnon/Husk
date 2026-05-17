@@ -2,7 +2,10 @@
 //!
 //! MCP adapter LLMs.
 
-use homelab_core::{tools::proxmox, Config, HomelabClient};
+use homelab_core::{
+    tools::{opnsense, proxmox},
+    Config, HomelabClient,
+};
 use rmcp::model::{Content, ErrorCode, ErrorData as McpError};
 use rmcp::{handler::server::tool::ToolRouter, model::CallToolResult, tool, tool_router};
 use rmcp::{tool_handler, ServerHandler};
@@ -115,6 +118,33 @@ impl HomelabMcp {
         })?;
 
         // MCP response: return one text content block containing JSON.
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "```json\n{}\n```",
+            json
+        ))]))
+    }
+
+    #[tool(
+        name = "get_dchp_leases",
+        description = "Gets DHCP leases from OPNsense"
+    )]
+    async fn get_dchp_leases(&self) -> std::result::Result<CallToolResult, McpError> {
+        let leases = opnsense::get_dhcp_leases(&self.client).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to get DHCP leases: {}", e),
+                None,
+            )
+        })?;
+
+        let json = serde_json::to_string_pretty(&leases).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to serialize leases: {}", e),
+                None,
+            )
+        })?;
+
         Ok(CallToolResult::success(vec![Content::text(format!(
             "```json\n{}\n```",
             json

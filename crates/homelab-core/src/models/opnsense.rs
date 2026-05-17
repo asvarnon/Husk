@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use crate::utils::expire_to_hours_remaining;
 
 //generic result response for opnsense api endpoints
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResponse<T> {
     pub total: u32,
     #[serde(rename = "rowCount")]
