@@ -5,7 +5,6 @@ use crate::models::proxmox::{
     VmSummary,
 };
 use crate::utils::{get_timestamp_local, seconds_to_human_readable};
-use rayon::iter::IntoParallelRefIterator;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -111,7 +110,6 @@ impl From<RawNode> for NodeSummary {
         }
     }
 }
-
 
 #[derive(Debug, Deserialize)]
 struct RawStorage {
