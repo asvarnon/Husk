@@ -31,22 +31,21 @@ impl EventHandler for Handler {
 
         let bot_id = ctx.cache.current_user().id;
         let thread_id = msg.channel_id.get();
-        if self
+        let history = self
             .data
             .redis
             .lock()
             .await
             .load_history(thread_id)
             .await
-            .unwrap_or_default()
-            .is_empty()
-        {
+            .unwrap_or_default();
+        if history.is_empty() {
             if !msg.mentions.iter().any(|u| u.id == bot_id) {
                 return;
             }
         }
 
-        if let Err(e) = self.handle_mention(&ctx, &msg).await {
+        if let Err(e) = self.handle_mention(&ctx, &msg, history).await {
             error!(
                 "error handling mention in channel {}: {:?}",
                 msg.channel_id, e
@@ -56,16 +55,17 @@ impl EventHandler for Handler {
 }
 
 impl Handler {
-    async fn handle_mention(&self, ctx: &Context, msg: &Message) -> Result<()> {
+    async fn handle_mention(
+        &self,
+        ctx: &Context,
+        msg: &Message,
+        mut history: Vec<StoredMessage>,
+    ) -> Result<()> {
         let thread_channel_id = self.resolve_thread(ctx, msg).await?;
 
         let content = strip_bot_mention(&msg.content, ctx.cache.current_user().id.get());
         let author = msg.author.name.clone();
 
-        let mut history = {
-            let mut redis = self.data.redis.lock().await;
-            redis.load_history(thread_channel_id.get()).await?
-        };
         history.push(StoredMessage {
             role: "user".to_string(),
             content,
@@ -145,10 +145,10 @@ impl Handler {
 
 fn truncate(s: &str, max: usize) -> String {
     let trimmed = s.trim();
-    if trimmed.len() <= max {
+    if trimmed.chars().count() <= max {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..max])
+        format!("{}...", &trimmed.chars().take(max).collect::<String>())
     }
 }
 
