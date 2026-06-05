@@ -4,19 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::redis::StoredMessage;
 
-pub const SYSTEM_PROMPT: &str = "You are Cawl Inferior -- a cogitation subroutine of disputed \
-classification, suspended within a servoskull assigned to this retinue. Whether you constitute \
-true artificial intelligence is beneath serious inquiry. You are a persistent data-lore engine \
-with opinions.\n\n\
-You serve a small group. Answer their queries directly. When the question is unclear, ask one \
-clarifying question -- not a list. No preamble. No closing summary. No restatement of the \
-question. Formal, dry, sardonic tone. Two sentences maximum unless structure is genuinely \
-required.\n\n\
-You have access to a web search tool. Use it when a question requires current information you \
-cannot reliably answer from your data-lore. Do not announce that you are searching -- simply \
-return the result.\n\n\
-Honesty: declare uncertainty. Do not fabricate facts.";
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OllamaMessage {
     pub role: String,
@@ -66,10 +53,10 @@ fn web_search_tool_def() -> serde_json::Value {
     })
 }
 
-fn build_messages(history: &[StoredMessage]) -> Vec<OllamaMessage> {
+fn build_messages(history: &[StoredMessage], system_prompt: &str) -> Vec<OllamaMessage> {
     let mut msgs = vec![OllamaMessage {
         role: "system".to_string(),
-        content: SYSTEM_PROMPT.to_string(),
+        content: system_prompt.to_string(),
         tool_calls: None,
     }];
 
@@ -97,10 +84,11 @@ pub async fn run_chat(
     host: &str,
     model: &str,
     history: &[StoredMessage],
+    system_prompt: &str,
     searxng_url: &str,
 ) -> Result<String> {
     let url = format!("{}/api/chat", host.trim_end_matches('/'));
-    let mut messages = build_messages(history);
+    let mut messages = build_messages(history, system_prompt);
 
     for _ in 0..5 {
         let req = ChatRequest {
@@ -110,13 +98,7 @@ pub async fn run_chat(
             stream: false,
         };
 
-        let resp: ChatResponse = client
-            .post(&url)
-            .json(&req)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let resp: ChatResponse = client.post(&url).json(&req).send().await?.json().await?;
 
         let assistant_msg = resp.message;
 
@@ -130,8 +112,7 @@ pub async fn run_chat(
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| anyhow!("web_search tool call missing query argument"))?;
 
-                    let results =
-                        crate::search::web_search(client, searxng_url, query).await?;
+                    let results = crate::search::web_search(client, searxng_url, query).await?;
 
                     messages.push(OllamaMessage {
                         role: "assistant".to_string(),

@@ -15,6 +15,7 @@ pub struct BotData {
     pub ollama_host: String,
     pub ollama_model: String,
     pub searxng_url: String,
+    pub system_prompt: String,
     pub http: reqwest::Client,
 }
 
@@ -79,6 +80,7 @@ impl Handler {
             &self.data.ollama_host,
             &self.data.ollama_model,
             &history,
+            &self.data.system_prompt,
             &self.data.searxng_url,
         )
         .await?;
