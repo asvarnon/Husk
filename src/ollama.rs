@@ -111,7 +111,7 @@ pub async fn run_chat(
                         .get("query")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| anyhow!("web_search tool call missing query argument"))?;
-
+                    tracing::info!("web_search: query={:?} model={}", query, model);
                     let results = crate::search::web_search(client, searxng_url, query).await?;
 
                     messages.push(OllamaMessage {

@@ -2,6 +2,7 @@ use crate::ollama;
 use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
+use serenity::all::PermissionOverwriteType::Member;
 use serenity::all::{
     AutoArchiveDuration, Channel, ChannelType, Context, CreateMessage, CreateThread, EventHandler,
     Message,
@@ -65,7 +66,13 @@ impl Handler {
         let thread_channel_id = self.resolve_thread(ctx, msg).await?;
 
         let content = strip_bot_mention(&msg.content, ctx.cache.current_user().id.get());
-        let author = msg.author.name.clone();
+
+        let author = msg
+            .member
+            .as_ref()
+            .map(|x| x.nick.clone())
+            .flatten()
+            .unwrap_or_else(|| msg.author.name.clone());
 
         history.push(StoredMessage {
             role: "user".to_string(),
