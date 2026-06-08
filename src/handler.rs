@@ -2,7 +2,6 @@ use crate::ollama;
 use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
-use serenity::all::PermissionOverwriteType::Member;
 use serenity::all::{
     AutoArchiveDuration, Channel, ChannelType, Context, CreateMessage, CreateThread, EventHandler,
     Message,
