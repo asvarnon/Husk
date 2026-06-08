@@ -40,10 +40,8 @@ impl EventHandler for Handler {
             .load_history(thread_id)
             .await
             .unwrap_or_default();
-        if history.is_empty() {
-            if !msg.mentions.iter().any(|u| u.id == bot_id) {
-                return;
-            }
+        if history.is_empty() && !msg.mentions.iter().any(|u| u.id == bot_id) {
+            return;
         }
 
         if let Err(e) = self.handle_mention(&ctx, &msg, history).await {
@@ -69,8 +67,7 @@ impl Handler {
         let author = msg
             .member
             .as_ref()
-            .map(|x| x.nick.clone())
-            .flatten()
+            .and_then(|x| x.nick.clone())
             .unwrap_or_else(|| msg.author.name.clone());
 
         history.push(StoredMessage {
