@@ -35,7 +35,9 @@ impl RedisState {
     pub async fn save_history(&mut self, thread_id: u64, history: &[StoredMessage]) -> Result<()> {
         let key = format!("discord:thread:{}", thread_id);
         let json = serde_json::to_string(history)?;
-        self.conn.set_ex::<_, _, ()>(&key, json, HISTORY_TTL).await?;
+        self.conn
+            .set_ex::<_, _, ()>(&key, json, HISTORY_TTL)
+            .await?;
         Ok(())
     }
 }
