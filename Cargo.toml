@@ -24,4 +24,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 # Long-term memory. Exact `=` pin required — pre-release, never matched by caret ranges.
-context-forge = { version = "=0.5.0-beta.2", features = ["distill-http"] }
+context-forge = { version = "=0.5.0-beta.3", features = ["distill-http"] }
