@@ -53,27 +53,53 @@ fn web_search_tool_def() -> serde_json::Value {
     })
 }
 
-fn build_messages(history: &[StoredMessage], system_prompt: &str) -> Vec<OllamaMessage> {
+fn build_messages(
+    history: &[StoredMessage],
+    system_prompt: &str,
+    memory_block: Option<&str>,
+) -> Vec<OllamaMessage> {
     let mut msgs = vec![OllamaMessage {
         role: "system".to_string(),
         content: system_prompt.to_string(),
         tool_calls: None,
     }];
 
-    for m in history {
-        let content = if m.role == "user" {
-            match &m.name {
-                Some(name) => format!("{}: {}", name, m.content),
-                None => m.content.clone(),
+    let convo: Vec<OllamaMessage> = history
+        .iter()
+        .map(|m| {
+            let content = if m.role == "user" {
+                match &m.name {
+                    Some(name) => format!("{}: {}", name, m.content),
+                    None => m.content.clone(),
+                }
+            } else {
+                m.content.clone()
+            };
+            OllamaMessage {
+                role: m.role.clone(),
+                content,
+                tool_calls: None,
             }
-        } else {
-            m.content.clone()
-        };
-        msgs.push(OllamaMessage {
-            role: m.role.clone(),
-            content,
-            tool_calls: None,
-        });
+        })
+        .collect();
+
+    // Long-term memory is untrusted recall, not instruction: inject it as a labeled user-role
+    // reference block right before the latest user turn (most relevant position) — never into
+    // the system message itself.
+    if let Some(block) = memory_block {
+        let mut convo = convo;
+        let pos = convo.len().saturating_sub(1);
+        convo.insert(
+            pos,
+            OllamaMessage {
+                role: "user".to_string(),
+                content: block.to_string(),
+                tool_calls: None,
+            },
+        );
+        msgs.extend(convo);
+    } else {
+        msgs.extend(convo);
     }
 
     msgs
@@ -86,9 +112,10 @@ pub async fn run_chat(
     history: &[StoredMessage],
     system_prompt: &str,
     searxng_url: &str,
+    memory_block: Option<&str>,
 ) -> Result<String> {
     let url = format!("{}/api/chat", host.trim_end_matches('/'));
-    let mut messages = build_messages(history, system_prompt);
+    let mut messages = build_messages(history, system_prompt, memory_block);
 
     for _ in 0..5 {
         let req = ChatRequest {
