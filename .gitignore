@@ -3,3 +3,6 @@
 *.db
 *.db-wal
 *.db-shm
+.claude/agents/
+.env
+.env.local

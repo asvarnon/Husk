@@ -111,17 +111,24 @@ pub async fn run_chat(
     model: &str,
     history: &[StoredMessage],
     system_prompt: &str,
-    searxng_url: &str,
+    searxng_url: Option<&str>,
     memory_block: Option<&str>,
 ) -> Result<String> {
     let url = format!("{}/api/chat", host.trim_end_matches('/'));
     let mut messages = build_messages(history, system_prompt, memory_block);
 
+    // Only advertise web_search when SearXNG is configured, so the model never calls a tool
+    // that isn't available.
+    let tools: Vec<serde_json::Value> = match searxng_url {
+        Some(_) => vec![web_search_tool_def()],
+        None => vec![],
+    };
+
     for _ in 0..5 {
         let req = ChatRequest {
             model,
             messages: messages.clone(),
-            tools: vec![web_search_tool_def()],
+            tools: tools.clone(),
             stream: false,
         };
 
@@ -138,8 +145,18 @@ pub async fn run_chat(
                         .get("query")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| anyhow!("web_search tool call missing query argument"))?;
-                    tracing::info!("web_search: query={:?} model={}", query, model);
-                    let results = crate::search::web_search(client, searxng_url, query).await?;
+                    // Defensive: web_search is only advertised when configured, but if a call
+                    // arrives while it's None, feed back a tool result instead of erroring.
+                    let results = match searxng_url {
+                        Some(searxng_url) => {
+                            tracing::info!("web_search: query={:?} model={}", query, model);
+                            crate::search::web_search(client, searxng_url, query).await?
+                        }
+                        None => {
+                            tracing::warn!("web_search called but SearXNG is not configured");
+                            "web search is not available".to_string()
+                        }
+                    };
 
                     messages.push(OllamaMessage {
                         role: "assistant".to_string(),

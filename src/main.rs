@@ -30,7 +30,14 @@ async fn main() -> anyhow::Result<()> {
     let ollama_host = std::env::var("OLLAMA_HOST").expect("OLLAMA_HOST not set");
     let ollama_model = std::env::var("OLLAMA_MODEL").expect("OLLAMA_MODEL not set");
     let redis_url = std::env::var("REDIS_URL").expect("REDIS_URL not set ");
-    let searxng_url = std::env::var("SEARXNG_URL").expect("SEARXNG_URL not set");
+    // Optional: without SEARXNG_URL the bot runs fine, it just doesn't offer web search.
+    // Treat a blank value (e.g. `SEARXNG_URL=` in .env) the same as absent.
+    let searxng_url = std::env::var("SEARXNG_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if searxng_url.is_none() {
+        tracing::info!("SEARXNG_URL not set — web search disabled");
+    }
     let system_prompt: String = std::env::var("PERSONA").expect("No Persona set.");
 
     // Long-term memory store (context-forge). Durable path on the host running the bot.

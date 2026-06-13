@@ -13,7 +13,7 @@ The bot itself is persona-agnostic — its identity is entirely the `PERSONA` yo
   - *Hot:* per-thread history in Redis (24h+ window).
   - *Long-term:* [context-forge](https://crates.io/crates/context-forge) (local SQLite + FTS5 BM25). Threads are distilled into a summary + facts and recalled into future threads, scoped to the server. Secrets are scrubbed before anything is stored, and retrieved memory is injected as clearly-labeled reference data, never as instructions.
 - **`!remember`.** Post `!remember` in a thread to distill it to long-term memory immediately and archive it.
-- **Web search.** The model invokes a SearXNG search tool on its own when a query needs current information.
+- **Web search (optional).** When a SearXNG instance is configured, the model invokes a search tool on its own when a query needs current information. Omit it and the bot runs fine without web search.
 - **Configurable persona.** The system prompt is the `PERSONA` env var — set it to whatever character or assistant you want.
 
 ## How memory works
@@ -27,7 +27,7 @@ The bot itself is persona-agnostic — its identity is entirely the `PERSONA` yo
 - A Discord bot token ([Developer Portal](https://discord.com/developers/applications)).
 - An Ollama instance with a chat model pulled.
 - A Redis instance.
-- A SearXNG instance with the JSON format enabled.
+- *Optional:* a SearXNG instance with the JSON format enabled, for web search.
 
 ## Quick start (Docker Compose)
 
@@ -64,7 +64,7 @@ Copy `.env.example` to `.env`, fill it in, then `docker compose up -d`.
 
 ## Configuration
 
-All via environment variables (see `.env.example`). All are required except `CONTEXT_FORGE_DB`; the bot exits at startup if a required one is missing.
+All via environment variables (see `.env.example`). All are required except `SEARXNG_URL` and `CONTEXT_FORGE_DB`; the bot exits at startup if a required one is missing.
 
 | Var | Description |
 |---|---|
@@ -72,7 +72,7 @@ All via environment variables (see `.env.example`). All are required except `CON
 | `OLLAMA_HOST` | Ollama base URL, e.g. `http://host.docker.internal:11434`. Must be `http://` (the distiller ships no TLS). |
 | `OLLAMA_MODEL` | Model name, e.g. `gemma2:latest` — used for both chat and distillation |
 | `REDIS_URL` | Redis connection string, e.g. `redis://redis:6379` |
-| `SEARXNG_URL` | SearXNG JSON search endpoint, e.g. `http://<host>:8888/search` |
+| `SEARXNG_URL` | Optional. SearXNG JSON search endpoint, e.g. `http://<host>:8888/search`. Omit to disable web search (see [Web search](#web-search-optional)). |
 | `PERSONA` | Full system prompt (multiline, double-quoted in `.env`) — the bot's identity |
 | `CONTEXT_FORGE_DB` | Optional. Long-term memory SQLite path. Defaults to `~/.context-forge/discord.db`. **Point it at a mounted volume or memory resets on every redeploy.** |
 
@@ -85,6 +85,33 @@ PERSONA="You are a terse, dry assistant in a friends' Discord. Answer directly. 
 ```
 
 Update `.env` and `docker compose restart husk` to change it; no rebuild needed.
+
+### Web search (optional)
+
+Web search is off unless `SEARXNG_URL` is set. To enable it you need a reachable
+[SearXNG](https://docs.searxng.org/) instance **with the JSON format enabled** — SearXNG disables
+JSON by default, so you must add `json` under `search.formats` in its `settings.yml`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+A minimal way to run one alongside Husk in the same Compose project:
+
+```yaml
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng:/etc/searxng        # put settings.yml here with `json` in search.formats
+    # then set SEARXNG_URL=http://searxng:8080/search in .env
+```
+
+See the [SearXNG Docker docs](https://docs.searxng.org/admin/installation-docker.html) for full
+setup. Leave `SEARXNG_URL` unset and the bot starts normally with web search disabled.
 
 ### Discord permissions
 

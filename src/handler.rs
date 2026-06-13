@@ -16,7 +16,8 @@ pub struct BotData {
     pub redis: Mutex<RedisState>,
     pub ollama_host: String,
     pub ollama_model: String,
-    pub searxng_url: String,
+    /// SearXNG JSON endpoint, or `None` when web search is disabled.
+    pub searxng_url: Option<String>,
     pub system_prompt: String,
     pub http: reqwest::Client,
     /// Long-term memory store. Sync (rusqlite) — every call goes through `spawn_blocking`.
@@ -129,7 +130,7 @@ impl Handler {
             &self.data.ollama_model,
             &history,
             &self.data.system_prompt,
-            &self.data.searxng_url,
+            self.data.searxng_url.as_deref(),
             memory_block.as_deref(),
         )
         .await?;
