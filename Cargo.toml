@@ -1,7 +1,11 @@
 [package]
-name = "homelab-discord"
+name = "husk"
 version = "0.1.0"
 edition = "2021"
+description = "A Discord bot backed by a local LLM (Ollama) with long-term memory, web search, and a configurable persona."
+license = "Apache-2.0"
+repository = "https://github.com/asvarnon/husk"
+readme = "README.md"
 
 [dependencies]
 serenity = { version = "0.12", default-features = false, features = [
@@ -12,16 +16,16 @@ serenity = { version = "0.12", default-features = false, features = [
     "builder",
     "rustls_backend",
 ] }
-tokio = { workspace = true }
+tokio = { version = "1", features = ["full"] }
 # Own reqwest version — serenity 0.12 pulls reqwest 0.12 / hyper 1.x
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-async-trait = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+async-trait = "0.1"
 # Long-term memory. Exact `=` pin required — pre-release, never matched by caret ranges.
 context-forge = { version = "=0.5.0-beta.3", features = ["distill-http"] }

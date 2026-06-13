@@ -1,9 +1,9 @@
 FROM rust:latest AS builder
-WORKDIR /workspace
+WORKDIR /app
 COPY . .
-RUN cargo build --release -p homelab-discord
+RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates libssl-dev && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /workspace/target/release/homelab-discord /usr/local/bin/homelab-discord
-ENTRYPOINT ["/usr/local/bin/homelab-discord"]
+COPY --from=builder /app/target/release/husk /usr/local/bin/husk
+ENTRYPOINT ["/usr/local/bin/husk"]
