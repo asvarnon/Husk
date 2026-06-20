@@ -174,9 +174,9 @@ dependencies = [
 
 [[package]]
 name = "context-forge"
-version = "0.5.0-beta.3"
+version = "0.5.0-beta.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1a99fe951035e5e444fa8b6a1e8367307e9ae85a44d1020168a7299c6a8cf37"
+checksum = "6260785eb5b705adbba73cf13320ddb6b8eedf794bc2439aeb708924eac5990e"
 dependencies = [
  "r2d2",
  "r2d2_sqlite",
