@@ -3,7 +3,7 @@ use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{ContextEntry, ContextForge, SaveOptions};
+use context_forge::{ChunkingDistiller, ContextEntry, ContextForge, SaveOptions};
 use serenity::all::{
     AutoArchiveDuration, Channel, ChannelType, Context, CreateMessage, CreateThread, EditThread,
     EventHandler, GuildChannel, GuildId, Message,
@@ -22,8 +22,9 @@ pub struct BotData {
     pub http: reqwest::Client,
     /// Long-term memory store. Sync (rusqlite) — every call goes through `spawn_blocking`.
     pub cf: Arc<ContextForge>,
-    /// Distiller pointed at the bot's own Ollama endpoint. Also sync.
-    pub distiller: Arc<OpenAiCompatDistiller>,
+    /// Distiller pointed at the bot's own Ollama endpoint. Also sync. Chunking wrapper
+    /// bounds per-call prompt size; coerces to `&dyn Distiller` for `distill_and_save`.
+    pub distiller: Arc<ChunkingDistiller<OpenAiCompatDistiller>>,
 }
 
 pub struct Handler {

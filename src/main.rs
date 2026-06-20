@@ -4,7 +4,7 @@ mod redis;
 mod search;
 
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{Config, ContextForge};
+use context_forge::{ChunkingDistiller, Config, ContextForge};
 use handler::{distill_thread, BotData, Handler};
 use redis::{now_unix, RedisState};
 use serenity::all::GatewayIntents;
@@ -19,6 +19,17 @@ use tracing_subscriber::EnvFilter;
 const IDLE_SECS: i64 = 7_200;
 // Check for idle threads every 5 minutes.
 const SWEEP_EVERY_SECS: u64 = 300;
+
+// Chunk budget for distillation (chars). The distiller is wrapped in a `ChunkingDistiller`
+// that splits a transcript into pieces of at most this size and distills each independently,
+// so a long thread no longer arrives at llama-server as one giant prompt. Peak prefill — and
+// the host-RAM prompt-cache buffers sized to it — is what was tripping the OOM killer on the
+// shared gamehost; bounding the per-call prompt bounds that. ~8K chars ≈ 2K tokens.
+const DISTILL_CHUNK_CHARS: usize = 8_000;
+// Per-request distiller timeout. With bounded chunks each call is small, but the gamehost's
+// game-server process contends for CPU, so a chunk can still be slow — give it generous
+// headroom rather than failing and retrying next sweep (Husk issue #4).
+const DISTILL_TIMEOUT_SECS: u64 = 600;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -62,11 +73,16 @@ async fn main() -> anyhow::Result<()> {
     let cf = Arc::new(ContextForge::open(cf_config)?);
 
     // Distiller points at the SAME Ollama the bot chats with (its OpenAI-compat /v1 endpoint),
-    // so distillation adds no infra and the model stays warm.
-    let distiller = Arc::new(OpenAiCompatDistiller::new(
+    // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:
+    // the chunk budget is the caller's policy (deployment-specific — it's our host's RAM, not the
+    // library's concern), so Husk supplies it here. The default `Structural` reduce keeps the
+    // merge deterministic and model-free — no extra prompt, no extra OOM risk.
+    let inner = OpenAiCompatDistiller::new(
         format!("{}/v1", ollama_host.trim_end_matches('/')),
         ollama_model.clone(),
-    )?);
+    )?
+    .with_timeout_secs(DISTILL_TIMEOUT_SECS)?;
+    let distiller = Arc::new(ChunkingDistiller::new(inner, DISTILL_CHUNK_CHARS));
 
     let redis_state = RedisState::connect(&redis_url).await?;
 
