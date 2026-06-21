@@ -6,8 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // 26h — a couple hours past Discord's 24h archive timer, so the archive backstop still finds
 // history if the idle sweep somehow missed the thread.
 const HISTORY_TTL: u64 = 93_600;
-// 30d — how long the "already distilled" dedup marker persists.
-const DISTILLED_TTL: u64 = 2_592_000;
 // Sorted set: member "guild:thread" -> last-activity unix ts. Swept for idle threads.
 const IDLE_WATCH_KEY: &str = "discord:idle_watch";
 
@@ -53,6 +51,14 @@ impl RedisState {
         self.conn
             .set_ex::<_, _, ()>(&key, json, HISTORY_TTL)
             .await?;
+        // Keep the distilled high-water mark alive in lockstep with the history it indexes:
+        // while a thread is active both are refreshed; once it goes quiet both lapse together,
+        // so a later conversation reusing the thread id distills from zero rather than against a
+        // stale index. EXPIRE is a harmless no-op when the mark doesn't exist (never distilled).
+        let watch_key = format!("discord:distilled_upto:{}", thread_id);
+        self.conn
+            .expire::<_, ()>(&watch_key, HISTORY_TTL as i64)
+            .await?;
         Ok(())
     }
 
@@ -83,18 +89,23 @@ impl RedisState {
         Ok(())
     }
 
-    /// Whether this thread has already been distilled into long-term memory.
-    pub async fn is_distilled(&mut self, thread_id: u64) -> Result<bool> {
-        let key = format!("discord:distilled:{}", thread_id);
-        let exists: bool = self.conn.exists(&key).await?;
-        Ok(exists)
+    /// How many of this thread's messages have already been distilled into long-term memory —
+    /// the high-water mark. `0` if the thread has never been distilled. Lives in lockstep with
+    /// the history blob (same TTL, refreshed together by `save_history`), so the mark can never
+    /// outlive the messages it indexes and `mark <= history.len()` always holds while both exist.
+    pub async fn distilled_upto(&mut self, thread_id: u64) -> Result<usize> {
+        let key = format!("discord:distilled_upto:{}", thread_id);
+        let n: Option<usize> = self.conn.get(&key).await?;
+        Ok(n.unwrap_or(0))
     }
 
-    /// Mark a thread as distilled so the other triggers skip it (dedup).
-    pub async fn mark_distilled(&mut self, thread_id: u64) -> Result<()> {
-        let key = format!("discord:distilled:{}", thread_id);
+    /// Advance the distilled high-water mark to `count` messages. Called only after a successful
+    /// save, so a failed distill never records progress — the thread is retried whole next time.
+    /// Shares the history TTL so the two expire together.
+    pub async fn set_distilled_upto(&mut self, thread_id: u64, count: usize) -> Result<()> {
+        let key = format!("discord:distilled_upto:{}", thread_id);
         self.conn
-            .set_ex::<_, _, ()>(&key, 1u8, DISTILLED_TTL)
+            .set_ex::<_, _, ()>(&key, count, HISTORY_TTL)
             .await?;
         Ok(())
     }

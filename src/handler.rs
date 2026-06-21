@@ -275,33 +275,38 @@ impl Handler {
     }
 }
 
-/// Distill a thread's Redis history into long-term memory. Idempotent via the
-/// `discord:distilled:{thread_id}` marker, so the three triggers (idle sweep, archive event,
-/// `!remember`) can all call it without double-distilling. Returns the number of entries saved,
-/// or `None` if the thread was already distilled or had no history.
+/// Distill a thread's Redis history into long-term memory. Tracks a per-thread high-water mark
+/// (`discord:distilled_upto:{thread_id}` = messages distilled so far), so the three triggers
+/// (idle sweep, archive event, `!remember`) can all call it without double-distilling, *and* a
+/// thread that gains new messages after an earlier distill gets only the **new** messages
+/// distilled on the next call. Each message is distilled exactly once across the thread's life,
+/// so re-running on a grown thread adds only the delta — no duplicate memory entries. Returns the
+/// number of entries saved, or `None` when there's nothing new since the last distill (or the
+/// thread has no history).
 ///
-/// The Redis lock is held only to check the marker and read history — never across the
-/// blocking distill call, which would serialize the whole bot.
+/// The Redis lock is held only to read history + mark and to advance the mark afterward — never
+/// across the blocking distill call, which would serialize the whole bot. The mark advances only
+/// on success, so a failed distill loses no data: the same delta is retried next time.
 pub async fn distill_thread(
     data: &BotData,
     guild_id: u64,
     thread_id: u64,
 ) -> Result<Option<usize>> {
-    let history = {
+    let (history, start) = {
         let mut redis = data.redis.lock().await;
-        if redis.is_distilled(thread_id).await.unwrap_or(false) {
-            let _ = redis.clear_idle_watch(guild_id, thread_id).await;
-            return Ok(None);
-        }
         let history = redis.load_history(thread_id).await.unwrap_or_default();
-        if history.is_empty() {
+        let start = redis.distilled_upto(thread_id).await.unwrap_or(0);
+        // Nothing new since the last distill — covers an empty thread and one already distilled
+        // up to its current length alike. Stop watching it for idleness either way.
+        if history.len() <= start {
             let _ = redis.clear_idle_watch(guild_id, thread_id).await;
             return Ok(None);
         }
-        history
+        (history, start)
     };
 
-    let transcript = format_transcript(&history);
+    // Distill only the messages added since the last successful distill.
+    let transcript = format_transcript(&history[start..]);
     let opts = SaveOptions {
         session_id: Some(format!("discord:thread:{thread_id}")),
         scope: Some(format!("discord:guild:{guild_id}")),
@@ -315,7 +320,7 @@ pub async fn distill_thread(
     .await??;
 
     let mut redis = data.redis.lock().await;
-    let _ = redis.mark_distilled(thread_id).await;
+    let _ = redis.set_distilled_upto(thread_id, history.len()).await;
     let _ = redis.clear_idle_watch(guild_id, thread_id).await;
     Ok(Some(ids.len()))
 }
