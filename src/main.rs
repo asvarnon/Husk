@@ -15,8 +15,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
-// Distill a thread ~2h after it goes quiet, while Redis is still warm.
-const IDLE_SECS: i64 = 7_200;
+// Distill a thread ~30 min after it goes quiet, while Redis is still warm.
+const IDLE_SECS: i64 = 1_800;
 // Check for idle threads every 5 minutes.
 const SWEEP_EVERY_SECS: u64 = 300;
 
