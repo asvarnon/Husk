@@ -6,6 +6,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel an in-progress run if the same PR/branch is pushed again.
 concurrency:
   group: ci-${{ github.ref }}
