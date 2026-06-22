@@ -64,17 +64,22 @@ Copy `.env.example` to `.env`, fill it in, then `docker compose up -d`.
 
 ## Configuration
 
-All via environment variables (see `.env.example`). All are required except `SEARXNG_URL` and `CONTEXT_FORGE_DB`; the bot exits at startup if a required one is missing.
+All via environment variables (see `.env.example`). All are required except `LLM_API_KEY`, `SEARXNG_URL`, and `CONTEXT_FORGE_DB`; the bot exits at startup if a required one is missing.
 
 | Var | Description |
 |---|---|
 | `DISCORD_TOKEN` | Bot token from the Discord Developer Portal |
-| `OLLAMA_HOST` | Ollama base URL, e.g. `http://host.docker.internal:11434`. Must be `http://` (the distiller ships no TLS). |
-| `OLLAMA_MODEL` | Model name, e.g. `gemma2:latest` — used for both chat and distillation |
+| `LLM_BASE_URL` | OpenAI-compatible backend base URL, e.g. `http://host.docker.internal:11434` (Ollama), `http://host:8080` (llama.cpp `llama-server`), `http://host:1234` (LM Studio). Give the server root or a `…/v1` URL — both work. Use `http://` for the local case (the distiller ships no TLS — see note). |
+| `LLM_MODEL` | Model name — used for both chat and distillation. e.g. `gemma2:latest` (Ollama), or the model id your runner reports. |
+| `LLM_API_KEY` | Optional. Bearer token for the chat endpoint (LM Studio / hosted gateways). Local runners (Ollama, llama.cpp) ignore it. **Chat only** — the distiller has no auth. |
 | `REDIS_URL` | Redis connection string, e.g. `redis://redis:6379` |
 | `SEARXNG_URL` | Optional. SearXNG JSON search endpoint, e.g. `http://<host>:8888/search`. Omit to disable web search (see [Web search](#web-search-optional)). |
 | `PERSONA` | Full system prompt (multiline, double-quoted in `.env`) — the bot's identity |
 | `CONTEXT_FORGE_DB` | Optional. Long-term memory SQLite path. Defaults to `~/.context-forge/discord.db`. **Point it at a mounted volume or memory resets on every redeploy.** |
+
+> **Backend-agnostic.** Husk talks to any OpenAI-compatible runner over `/v1/chat/completions`. Switch backends by changing `LLM_BASE_URL` / `LLM_MODEL` and restarting — no rebuild. The legacy `OLLAMA_HOST` / `OLLAMA_MODEL` names still work as aliases (`LLM_*` wins if both are set).
+>
+> **Distiller caveat:** long-term-memory distillation uses the same backend but over a no-TLS, no-auth client, so it needs a local `http://` endpoint. If you point chat at an authenticated/HTTPS gateway via `LLM_API_KEY`, distillation against that same gateway won't work until the underlying library gains TLS + auth.
 
 ### Persona
 

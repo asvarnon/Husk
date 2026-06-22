@@ -1,5 +1,5 @@
 mod handler;
-mod ollama;
+mod llm;
 mod redis;
 mod search;
 
@@ -31,6 +31,23 @@ const DISTILL_CHUNK_CHARS: usize = 8_000;
 // headroom rather than failing and retrying next sweep (Husk issue #4).
 const DISTILL_TIMEOUT_SECS: u64 = 600;
 
+/// First of `primary` then `alias` that is set and non-blank (trimmed). Lets the runner-neutral
+/// `LLM_*` names take precedence while keeping the legacy `OLLAMA_*` names working.
+fn env_alias(primary: &str, alias: &str) -> Option<String> {
+    [primary, alias]
+        .into_iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .map(|v| v.trim().to_string())
+        .find(|v| !v.is_empty())
+}
+
+/// Reduce a configured base URL to the server root, so `{base}/v1...` always composes whether
+/// the user gave `http://host:8080` or the OpenAI-style `http://host:8080/v1`.
+fn normalize_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -38,8 +55,19 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let token = std::env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN not set");
-    let ollama_host = std::env::var("OLLAMA_HOST").expect("OLLAMA_HOST not set");
-    let ollama_model = std::env::var("OLLAMA_MODEL").expect("OLLAMA_MODEL not set");
+    // Runner-neutral config: any OpenAI-compatible backend (Ollama, llama.cpp, LM Studio, …).
+    // The legacy `OLLAMA_*` names still work as aliases so existing deployments don't break.
+    let llm_base_url = env_alias("LLM_BASE_URL", "OLLAMA_HOST")
+        .map(|s| normalize_base_url(&s))
+        .expect("Set LLM_BASE_URL (or legacy OLLAMA_HOST)");
+    let llm_model =
+        env_alias("LLM_MODEL", "OLLAMA_MODEL").expect("Set LLM_MODEL (or legacy OLLAMA_MODEL)");
+    // Optional bearer token for the chat endpoint (LM Studio / hosted gateways). Local runners
+    // ignore it. The distiller path has no auth (see distiller construction below).
+    let llm_api_key = std::env::var("LLM_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let redis_url = std::env::var("REDIS_URL").expect("REDIS_URL not set ");
     // Optional: without SEARXNG_URL the bot runs fine, it just doesn't offer web search.
     // Treat a blank value (e.g. `SEARXNG_URL=` in .env) the same as absent.
@@ -72,24 +100,25 @@ async fn main() -> anyhow::Result<()> {
     };
     let cf = Arc::new(ContextForge::open(cf_config)?);
 
-    // Distiller points at the SAME Ollama the bot chats with (its OpenAI-compat /v1 endpoint),
+    // Distiller points at the SAME backend the bot chats with (its OpenAI-compat /v1 endpoint),
     // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:
     // the chunk budget is the caller's policy (deployment-specific — it's our host's RAM, not the
     // library's concern), so Husk supplies it here. The default `Structural` reduce keeps the
     // merge deterministic and model-free — no extra prompt, no extra OOM risk.
-    let inner = OpenAiCompatDistiller::new(
-        format!("{}/v1", ollama_host.trim_end_matches('/')),
-        ollama_model.clone(),
-    )?
-    .with_timeout_secs(DISTILL_TIMEOUT_SECS)?;
+    // `llm_base_url` is already normalized to the server root, so `{base}/v1` is the
+    // OpenAI-compat endpoint. NOTE: the distiller ships no TLS and no auth — it needs a local,
+    // unauthenticated http:// endpoint. `LLM_API_KEY` therefore applies to chat only.
+    let inner = OpenAiCompatDistiller::new(format!("{llm_base_url}/v1"), llm_model.clone())?
+        .with_timeout_secs(DISTILL_TIMEOUT_SECS)?;
     let distiller = Arc::new(ChunkingDistiller::new(inner, DISTILL_CHUNK_CHARS));
 
     let redis_state = RedisState::connect(&redis_url).await?;
 
     let data = Arc::new(BotData {
         redis: Mutex::new(redis_state),
-        ollama_host,
-        ollama_model,
+        llm_base_url,
+        llm_model,
+        llm_api_key,
         searxng_url,
         system_prompt,
         http: reqwest::Client::new(),
@@ -97,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
         distiller,
     });
 
-    // Idle sweep: the PRIMARY distill trigger. Distills threads that went quiet ~2h ago while
+    // Idle sweep: the PRIMARY distill trigger. Distills threads that went quiet ~30 min ago while
     // Redis still holds their history, so neither the 24h TTL nor the archive event is load-bearing.
     {
         let data = data.clone();

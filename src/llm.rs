@@ -11,7 +11,7 @@ use crate::redis::StoredMessage;
 const MAX_TOOL_ROUNDS: usize = 5;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OllamaMessage {
+pub struct ChatMessage {
     pub role: String,
     // OpenAI lets `content` be null on an assistant message that carries tool_calls, so it must
     // be optional in both directions: absent when we serialize, null-tolerant when we parse.
@@ -49,7 +49,7 @@ pub struct ToolFunction {
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: Vec<OllamaMessage>,
+    messages: Vec<ChatMessage>,
     tools: Vec<serde_json::Value>,
     stream: bool,
 }
@@ -62,7 +62,7 @@ struct ChatResponse {
 
 #[derive(Deserialize)]
 struct Choice {
-    message: OllamaMessage,
+    message: ChatMessage,
 }
 
 fn web_search_tool_def() -> serde_json::Value {
@@ -86,15 +86,15 @@ fn build_messages(
     history: &[StoredMessage],
     system_prompt: &str,
     memory_block: Option<&str>,
-) -> Vec<OllamaMessage> {
-    let mut msgs = vec![OllamaMessage {
+) -> Vec<ChatMessage> {
+    let mut msgs = vec![ChatMessage {
         role: "system".to_string(),
         content: Some(system_prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
     }];
 
-    let convo: Vec<OllamaMessage> = history
+    let convo: Vec<ChatMessage> = history
         .iter()
         .map(|m| {
             let content = if m.role == "user" {
@@ -105,7 +105,7 @@ fn build_messages(
             } else {
                 m.content.clone()
             };
-            OllamaMessage {
+            ChatMessage {
                 role: m.role.clone(),
                 content: Some(content),
                 tool_calls: None,
@@ -122,7 +122,7 @@ fn build_messages(
         let pos = convo.len().saturating_sub(1);
         convo.insert(
             pos,
-            OllamaMessage {
+            ChatMessage {
                 role: "user".to_string(),
                 content: Some(block.to_string()),
                 tool_calls: None,
@@ -137,16 +137,18 @@ fn build_messages(
     msgs
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_chat(
     client: &Client,
-    host: &str,
+    base_url: &str,
     model: &str,
     history: &[StoredMessage],
     system_prompt: &str,
     searxng_url: Option<&str>,
     memory_block: Option<&str>,
+    api_key: Option<&str>,
 ) -> Result<String> {
-    let url = format!("{}/v1/chat/completions", host.trim_end_matches('/'));
+    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let mut messages = build_messages(history, system_prompt, memory_block);
 
     // Only advertise web_search when SearXNG is configured, so the model never calls a tool
@@ -164,7 +166,12 @@ pub async fn run_chat(
             stream: false,
         };
 
-        let resp: ChatResponse = client.post(&url).json(&req).send().await?.json().await?;
+        // Attach the bearer token only when configured — local runners need no auth.
+        let mut request = client.post(&url).json(&req);
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let resp: ChatResponse = request.send().await?.json().await?;
 
         let assistant_msg = resp
             .choices
@@ -216,7 +223,7 @@ pub async fn run_chat(
                 }
             };
 
-            messages.push(OllamaMessage {
+            messages.push(ChatMessage {
                 role: "tool".to_string(),
                 content: Some(results),
                 tool_calls: None,
