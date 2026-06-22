@@ -1,4 +1,4 @@
-use crate::ollama;
+use crate::llm;
 use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -14,8 +14,13 @@ use tracing::{error, warn};
 
 pub struct BotData {
     pub redis: Mutex<RedisState>,
-    pub ollama_host: String,
-    pub ollama_model: String,
+    /// OpenAI-compatible backend base URL (server root; `/v1` is appended). Runner-neutral —
+    /// Ollama, llama.cpp, LM Studio, etc.
+    pub llm_base_url: String,
+    pub llm_model: String,
+    /// Optional bearer token for the chat endpoint. Local runners ignore it; the distiller
+    /// path has no auth support.
+    pub llm_api_key: Option<String>,
     /// SearXNG JSON endpoint, or `None` when web search is disabled.
     pub searxng_url: Option<String>,
     pub system_prompt: String,
@@ -125,14 +130,15 @@ impl Handler {
 
         let _ = thread_channel_id.broadcast_typing(&ctx.http).await;
 
-        let response = ollama::run_chat(
+        let response = llm::run_chat(
             &self.data.http,
-            &self.data.ollama_host,
-            &self.data.ollama_model,
+            &self.data.llm_base_url,
+            &self.data.llm_model,
             &history,
             &self.data.system_prompt,
             self.data.searxng_url.as_deref(),
             memory_block.as_deref(),
+            self.data.llm_api_key.as_deref(),
         )
         .await?;
 
