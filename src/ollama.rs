@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::redis::StoredMessage;
 
+// Circuit breaker on the tool-calling cycle: each iteration is one model round-trip, looping
+// only when the model requests tools (it reads the results next round). A model that never
+// settles on a final answer — endlessly calling tools — would otherwise loop forever, so cap
+// the rounds and error out. Normal replies finish in 1-2 rounds, well under this.
+const MAX_TOOL_ROUNDS: usize = 5;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OllamaMessage {
     pub role: String,
@@ -150,7 +156,7 @@ pub async fn run_chat(
         None => vec![],
     };
 
-    for _ in 0..5 {
+    for _ in 0..MAX_TOOL_ROUNDS {
         let req = ChatRequest {
             model,
             messages: messages.clone(),
@@ -167,47 +173,57 @@ pub async fn run_chat(
             .ok_or_else(|| anyhow!("chat response had no choices"))?
             .message;
 
-        if let Some(calls) = &assistant_msg.tool_calls {
-            if let Some(call) = calls.first() {
-                if call.function.name == "web_search" {
-                    // Arguments arrive as a JSON string, so parse it before reading fields.
-                    let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                        .map_err(|e| anyhow!("web_search arguments were not valid JSON: {e}"))?;
-                    let query = args
-                        .get("query")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| anyhow!("web_search tool call missing query argument"))?
-                        .to_string();
-                    let tool_call_id = call.id.clone();
-
-                    // Defensive: web_search is only advertised when configured, but if a call
-                    // arrives while it's None, feed back a tool result instead of erroring.
-                    let results = match searxng_url {
-                        Some(searxng_url) => {
-                            tracing::info!("web_search: query={:?} model={}", query, model);
-                            crate::search::web_search(client, searxng_url, &query).await?
-                        }
-                        None => {
-                            tracing::warn!("web_search called but SearXNG is not configured");
-                            "web search is not available".to_string()
-                        }
-                    };
-
-                    // Echo the assistant's tool-call message, then answer it with a tool-role
-                    // message linked by tool_call_id — OpenAI's required call/result pairing.
-                    messages.push(assistant_msg.clone());
-                    messages.push(OllamaMessage {
-                        role: "tool".to_string(),
-                        content: Some(results),
-                        tool_calls: None,
-                        tool_call_id: Some(tool_call_id),
-                    });
-                    continue;
-                }
-            }
+        // No tool calls → the assistant has given its final answer.
+        let tool_calls = assistant_msg.tool_calls.clone().unwrap_or_default();
+        if tool_calls.is_empty() {
+            return Ok(assistant_msg.content.unwrap_or_default());
         }
 
-        return Ok(assistant_msg.content.unwrap_or_default());
+        // Echo the assistant turn that requested the tools — pushed once; it carries every
+        // tool_call, and OpenAI requires each to be answered by its own tool-role message below.
+        messages.push(assistant_msg);
+
+        // Answer EVERY call (a model may emit several in one turn), each linked back by its
+        // tool_call_id. Dispatch is a hardcoded match for now — `web_search` is the only tool;
+        // a general tool registry is tracked separately (see issue).
+        for call in tool_calls {
+            if call.function.name != "web_search" {
+                return Err(anyhow!(
+                    "model requested unknown tool '{}'",
+                    call.function.name
+                ));
+            }
+
+            // Arguments arrive as a JSON string, so parse it before reading fields.
+            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
+                .map_err(|e| anyhow!("web_search arguments were not valid JSON: {e}"))?;
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("web_search tool call missing query argument"))?
+                .to_string();
+
+            // Defensive: web_search is only advertised when configured, but if a call
+            // arrives while it's None, feed back a tool result instead of erroring.
+            let results = match searxng_url {
+                Some(searxng_url) => {
+                    tracing::info!("web_search: query={:?} model={}", query, model);
+                    crate::search::web_search(client, searxng_url, &query).await?
+                }
+                None => {
+                    tracing::warn!("web_search called but SearXNG is not configured");
+                    "web search is not available".to_string()
+                }
+            };
+
+            messages.push(OllamaMessage {
+                role: "tool".to_string(),
+                content: Some(results),
+                tool_calls: None,
+                tool_call_id: Some(call.id),
+            });
+        }
+        // Falls through to the next loop iteration so the model can use the tool results.
     }
 
     Err(anyhow!("tool call loop exceeded maximum iterations"))
