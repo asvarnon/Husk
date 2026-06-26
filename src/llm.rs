@@ -22,6 +22,11 @@ pub struct ChatMessage {
     // Links a tool-result message back to the assistant tool_call it answers — OpenAI requires it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    // Reasoning models (deepseek reasoning format) split their thinking trace into this field,
+    // separate from `content`. Response-only: captured for diagnostics, never echoed back into a
+    // request (`skip_serializing`), so a prior turn's reasoning never re-enters the context.
+    #[serde(default, skip_serializing)]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -63,6 +68,9 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: ChatMessage,
+    // Why generation stopped: "stop" (natural EOS), "length" (hit token cap), "tool_calls", etc.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 fn web_search_tool_def() -> serde_json::Value {
@@ -92,6 +100,7 @@ fn build_messages(
         content: Some(system_prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     }];
 
     let convo: Vec<ChatMessage> = history
@@ -110,6 +119,7 @@ fn build_messages(
                 content: Some(content),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             }
         })
         .collect();
@@ -127,6 +137,7 @@ fn build_messages(
                 content: Some(block.to_string()),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             },
         );
         msgs.extend(convo);
@@ -166,6 +177,14 @@ pub async fn run_chat(
             stream: false,
         };
 
+        // Diagnostic: the exact wire body, to diff against a known-good curl when a runner's
+        // chat template misbehaves. Serialized only when DEBUG is on, so prod pays nothing.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            if let Ok(body) = serde_json::to_string(&req) {
+                tracing::debug!("LLM request body: {body}");
+            }
+        }
+
         // Attach the bearer token only when configured — local runners need no auth.
         let mut request = client.post(&url).json(&req);
         if let Some(key) = api_key {
@@ -173,21 +192,59 @@ pub async fn run_chat(
         }
         let resp: ChatResponse = request.send().await?.json().await?;
 
-        let assistant_msg = resp
+        let choice = resp
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow!("chat response had no choices"))?
-            .message;
+            .ok_or_else(|| anyhow!("chat response had no choices"))?;
+        let finish_reason = choice.finish_reason;
+        let mut assistant_msg = choice.message;
 
         // No tool calls → the assistant has given its final answer.
         let tool_calls = assistant_msg.tool_calls.clone().unwrap_or_default();
         if tool_calls.is_empty() {
-            return Ok(assistant_msg.content.unwrap_or_default());
+            let content = assistant_msg.content.unwrap_or_default();
+            // Guard an empty final answer. Returning it would POST an empty Discord message —
+            // "Cannot send an empty message". Known failure mode (seen on the gamehost q4 12b):
+            // a reasoning model dumps its substance into `reasoning_content` and leaves `content`
+            // empty. Husk reads `content` (correct — the thinking trace is not the answer), so log
+            // the split for diagnosis, then surface an error rather than sending nothing.
+            if content.trim().is_empty() {
+                let reasoning_chars = assistant_msg
+                    .reasoning_content
+                    .as_deref()
+                    .map(|r| r.trim().chars().count())
+                    .unwrap_or(0);
+                tracing::warn!(
+                    "empty content from model (finish_reason={:?}, reasoning_content={} chars); \
+                     the reply collapsed into reasoning with no final answer — usually a model / \
+                     quant / reasoning-format issue on the serving backend",
+                    finish_reason,
+                    reasoning_chars
+                );
+                return Err(anyhow!("model returned an empty response"));
+            }
+            return Ok(content);
         }
 
         // Echo the assistant turn that requested the tools — pushed once; it carries every
         // tool_call, and OpenAI requires each to be answered by its own tool-role message below.
+        // OpenAI convention: an assistant turn with tool_calls carries *null* content; some runners
+        // emit an empty string instead. Normalize empty/whitespace to None so the echoed turn
+        // matches the canonical shape — spec hygiene for picky chat templates. (NOTE: this was
+        // *not* confirmed to cause the empty-EOS bug — live-tested against gemma4-coding, empty,
+        // null, and non-empty preamble content all produced valid follow-ups. That bug remains
+        // unreproduced and appears gamehost-environment-specific; see the empty-response guard
+        // above and the request-body debug log.)
+        if assistant_msg
+            .content
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
+            assistant_msg.content = None;
+        }
         messages.push(assistant_msg);
 
         // Answer EVERY call (a model may emit several in one turn), each linked back by its
@@ -228,6 +285,7 @@ pub async fn run_chat(
                 content: Some(results),
                 tool_calls: None,
                 tool_call_id: Some(call.id),
+                reasoning_content: None,
             });
         }
         // Falls through to the next loop iteration so the model can use the tool results.
