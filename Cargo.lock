@@ -411,7 +411,9 @@ dependencies = [
 
 [[package]]
 name = "context-forge"
-version = "0.5.0"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a744f089103ee759a9cc62ddfa0ebf2f65affce692f4a9a2d1d72e0822cabc1"
 dependencies = [
  "async-trait",
  "regex",
@@ -2382,7 +2384,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
