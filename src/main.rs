@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         c.max_entries = 50_000;
         c
     };
-    let cf = Arc::new(ContextForge::open(cf_config)?);
+    let cf = Arc::new(ContextForge::open(cf_config).await?);
 
     // Distiller points at the SAME backend the bot chats with (its OpenAI-compat /v1 endpoint),
     // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:
@@ -109,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
     // OpenAI-compat endpoint. NOTE: the distiller ships no TLS and no auth — it needs a local,
     // unauthenticated http:// endpoint. `LLM_API_KEY` therefore applies to chat only.
     let inner = OpenAiCompatDistiller::new(format!("{llm_base_url}/v1"), llm_model.clone())?
-        .with_timeout_secs(DISTILL_TIMEOUT_SECS)?;
+        .with_timeout_secs(DISTILL_TIMEOUT_SECS);
     let distiller = Arc::new(ChunkingDistiller::new(inner, DISTILL_CHUNK_CHARS));
 
     let redis_state = RedisState::connect(&redis_url).await?;

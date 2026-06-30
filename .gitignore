@@ -1,8 +1,9 @@
 /target
 .env
+.env.local
 *.db
 *.db-wal
 *.db-shm
 .claude/agents/
-.env
-.env.local
+dev.ps1
+docker-compose.dev.yml
