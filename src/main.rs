@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         c.max_entries = 50_000;
         c
     };
-    let cf = Arc::new(ContextForge::open(cf_config)?);
+    let cf = Arc::new(ContextForge::open(cf_config).await?);
 
     // Distiller points at the SAME backend the bot chats with (its OpenAI-compat /v1 endpoint),
     // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:

@@ -173,16 +173,10 @@ impl Handler {
         let scope = format!("discord:guild:{}", guild_id.get());
         let q = query.to_owned();
         let cf = self.data.cf.clone();
-        let result =
-            tokio::task::spawn_blocking(move || cf.query(&q, Some(scope.as_str()), 1024)).await;
-        let hits = match result {
-            Ok(Ok(hits)) => hits,
-            Ok(Err(e)) => {
-                warn!("memory query failed: {e}");
-                return None;
-            }
+        let hits = match cf.query(&q, Some(scope.as_str()), 1024).await {
+            Ok(hits) => hits,
             Err(e) => {
-                warn!("memory query task failed to join: {e}");
+                warn!("memory query failed: {e}");
                 return None;
             }
         };
@@ -320,10 +314,9 @@ pub async fn distill_thread(
     };
     let cf = data.cf.clone();
     let distiller = data.distiller.clone();
-    let ids = tokio::task::spawn_blocking(move || {
-        cf.distill_and_save(&transcript, distiller.as_ref(), &opts)
-    })
-    .await??;
+    let ids = cf
+        .distill_and_save(&transcript, distiller.as_ref(), &opts)
+        .await?;
 
     let mut redis = data.redis.lock().await;
     let _ = redis.set_distilled_upto(thread_id, history.len()).await;
