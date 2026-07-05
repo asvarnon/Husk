@@ -2,8 +2,8 @@
 version = 2
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
-unmaintained = "warn"
-unsound = "warn"
+unmaintained = "all"
+unsound = "all"
 
 # rustls-webpki 0.103.x fixes these four advisories, but serenity and reqwest
 # both pin rustls to 0.23, which pulls webpki 0.102.8. Moving to 0.103.x
