@@ -24,12 +24,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      # Build into the local Docker daemon first (no push). This lets us run the
+      # image before it is published, so a broken build fails the release instead
+      # of crash-looping in production.
+      - name: Build image (local)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile
-          push: true
+          push: false
+          load: true
           tags: |
             ghcr.io/${{ env.OWNER }}/husk:latest
             ghcr.io/${{ env.OWNER }}/husk:${{ github.ref_name }}
+
+      # Smoke test: run the binary and confirm it reaches application code rather
+      # than dying in the dynamic loader. A glibc / base-image mismatch (builder
+      # newer than runtime) surfaces here as "GLIBC_x.yz not found" at exec time,
+      # before any config is read — so no secrets or network are required. With no
+      # env set, husk panics on the missing DISCORD_TOKEN, which proves the binary
+      # loaded and ran our own code.
+      - name: Smoke test (loader / glibc)
+        run: |
+          set +e
+          output=$(docker run --rm ghcr.io/${{ env.OWNER }}/husk:${{ github.ref_name }} 2>&1)
+          code=$?
+          echo "--- container output (exit $code) ---"
+          echo "$output"
+          echo "--------------------------------------"
+          if echo "$output" | grep -qiE 'GLIBC_|version .* not found|cannot execute|no such file or directory'; then
+            echo "::error::Binary failed to load — likely a glibc/base-image mismatch between builder and runtime stages"
+            exit 1
+          fi
+          if echo "$output" | grep -q 'DISCORD_TOKEN not set'; then
+            echo "Binary loaded and reached application code — OK"
+            exit 0
+          fi
+          echo "::error::Unexpected startup output — binary did not reach the expected DISCORD_TOKEN check"
+          exit 1
+
+      - name: Push image
+        run: |
+          docker push ghcr.io/${{ env.OWNER }}/husk:latest
+          docker push ghcr.io/${{ env.OWNER }}/husk:${{ github.ref_name }}

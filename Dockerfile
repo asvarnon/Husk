@@ -1,4 +1,8 @@
-FROM rust:latest AS builder
+# Pin the builder to a bookworm base so its glibc matches the bookworm-slim
+# runtime below. `rust:latest` tracks Debian trixie (glibc 2.38), which produces
+# a binary the bookworm-slim runtime (glibc 2.36) cannot load. Keep these two in
+# lockstep: if you bump the runtime to trixie, bump the builder to match.
+FROM rust:bookworm AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release
