@@ -1,0 +1,13 @@
+[advisories]
+ignore = [
+    # rustls-webpki 0.103.x fixes these, but serenity and reqwest lock rustls to
+    # 0.23 which pulls webpki 0.102.8. We cannot upgrade without upstream changes.
+    # All four affect CRL parsing or certificate name constraints — neither of which
+    # this outbound-only bot exercises: it never parses CRLs, never acts as a TLS
+    # server, and all bugs require misissuance to exploit. Revisit when serenity or
+    # reqwest moves to rustls 0.24.
+    "RUSTSEC-2026-0049",  # CRL distribution point matching
+    "RUSTSEC-2026-0098",  # URI name constraints accepted
+    "RUSTSEC-2026-0099",  # wildcard name constraint bypass
+    "RUSTSEC-2026-0104",  # panic in CRL parsing
+]
