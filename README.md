@@ -95,11 +95,15 @@ Update `.env` and `docker compose restart husk` to change it; no rebuild needed.
 
 Set `LEXICON_CONFIG` to a TOML file path. On startup, if the file doesn't exist the bot generates it automatically by asking the configured LLM to derive weighted terms from the `PERSONA`. The lexicon biases long-term memory recall toward domain-relevant entries.
 
-Add terms live with the `/lexicon add` slash command:
+Add or remove entries live with the `/lexicon` slash command:
 
 ```
-/lexicon add term:Battle-Sister weight:0.7
-/lexicon add term:Adeptus Mechanicus weight:1.0
+/lexicon add term        term:Battle-Sister weight:0.7
+/lexicon add affirmation pattern:for the Emperor
+/lexicon add negation    pattern:scrapcode
+/lexicon remove term        term:Battle-Sister
+/lexicon remove affirmation pattern:for the Emperor
+/lexicon remove negation    pattern:scrapcode
 ```
 
 ### Web search (optional)

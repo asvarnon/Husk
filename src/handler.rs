@@ -110,25 +110,114 @@ impl EventHandler for Handler {
                 .description("Manage the persona lexicon.")
                 .add_option(
                     CreateCommandOption::new(
-                        CommandOptionType::SubCommand,
+                        CommandOptionType::SubCommandGroup,
                         "add",
-                        "Add a term to the lexicon",
+                        "Add an entry to the lexicon",
                     )
                     .add_sub_option(
                         CreateCommandOption::new(
-                            CommandOptionType::String,
+                            CommandOptionType::SubCommand,
                             "term",
-                            "Term or phrase to add",
+                            "Add a weighted term",
                         )
-                        .required(true),
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "term",
+                                "Term or phrase to add",
+                            )
+                            .required(true),
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::Number,
+                                "weight",
+                                "Importance weight between 0.0 and 1.5",
+                            )
+                            .required(true),
+                        ),
                     )
                     .add_sub_option(
                         CreateCommandOption::new(
-                            CommandOptionType::Number,
-                            "weight",
-                            "Importance weight between 0.0 and 1.5",
+                            CommandOptionType::SubCommand,
+                            "affirmation",
+                            "Add an affirmation pattern",
                         )
-                        .required(true),
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "pattern",
+                                "Pattern to add",
+                            )
+                            .required(true),
+                        ),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::SubCommand,
+                            "negation",
+                            "Add a negation pattern",
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "pattern",
+                                "Pattern to add",
+                            )
+                            .required(true),
+                        ),
+                    ),
+                )
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommandGroup,
+                        "remove",
+                        "Remove an entry from the lexicon",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::SubCommand,
+                            "term",
+                            "Remove a weighted term",
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "term",
+                                "Term to remove",
+                            )
+                            .required(true),
+                        ),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::SubCommand,
+                            "affirmation",
+                            "Remove an affirmation pattern",
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "pattern",
+                                "Pattern to remove",
+                            )
+                            .required(true),
+                        ),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::SubCommand,
+                            "negation",
+                            "Remove a negation pattern",
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "pattern",
+                                "Pattern to remove",
+                            )
+                            .required(true),
+                        ),
                     ),
                 ),
         )
@@ -303,51 +392,6 @@ impl Handler {
     }
 
     async fn handle_slash_lexicon(&self, ctx: &Context, cmd: &CommandInteraction) {
-        let sub = match cmd.data.options.first() {
-            Some(s) if s.name == "add" => s,
-            _ => return,
-        };
-
-        let opts = match &sub.value {
-            CommandDataOptionValue::SubCommand(opts) => opts,
-            _ => return,
-        };
-
-        let term = opts
-            .iter()
-            .find(|o| o.name == "term")
-            .and_then(|o| {
-                if let CommandDataOptionValue::String(s) = &o.value {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            });
-
-        let weight = opts
-            .iter()
-            .find(|o| o.name == "weight")
-            .and_then(|o| {
-                if let CommandDataOptionValue::Number(n) = &o.value {
-                    Some(*n)
-                } else {
-                    None
-                }
-            });
-
-        let (Some(term), Some(weight)) = (term, weight) else {
-            let _ = cmd
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content("Missing `term` or `weight`."),
-                    ),
-                )
-                .await;
-            return;
-        };
-
         let Some(ref path) = self.data.lexicon_path else {
             let _ = cmd
                 .create_response(
@@ -362,51 +406,134 @@ impl Handler {
             return;
         };
 
-        if weight <= 0.0 || weight > 1.5 {
-            let _ = cmd
-                .create_response(
-                    &ctx.http,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content("Weight must be in the range (0.0, 1.5]."),
-                    ),
-                )
-                .await;
-            return;
-        }
-
-        let proposal = LexiconProposal {
-            term: term.clone(),
-            weight: weight as f32,
-            rationale: String::new(),
-            source_ids: vec![],
+        // Structure: group (add/remove) → subcommand (term/affirmation/negation) → options
+        let group = match cmd.data.options.first() {
+            Some(g) => g,
+            None => return,
+        };
+        let subs = match &group.value {
+            CommandDataOptionValue::SubCommandGroup(subs) => subs,
+            _ => return,
+        };
+        let sub = match subs.first() {
+            Some(s) => s,
+            None => return,
+        };
+        let opts = match &sub.value {
+            CommandDataOptionValue::SubCommand(opts) => opts,
+            _ => return,
         };
 
-        match LexiconAppender::new(path.clone()).append(&proposal) {
-            Ok(()) => {
-                let _ = cmd
-                    .create_response(
-                        &ctx.http,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .content(format!("Added \"{term}\" ({weight}) to the lexicon.")),
-                        ),
-                    )
-                    .await;
+        let appender = LexiconAppender::new(path.clone());
+
+        let result: Result<String> = match (group.name.as_str(), sub.name.as_str()) {
+            ("add", "term") => {
+                let term = opts.iter().find(|o| o.name == "term").and_then(|o| {
+                    if let CommandDataOptionValue::String(s) = &o.value {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                });
+                let weight = opts.iter().find(|o| o.name == "weight").and_then(|o| {
+                    if let CommandDataOptionValue::Number(n) = &o.value {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                });
+                let (Some(term), Some(weight)) = (term, weight) else {
+                    let _ = cmd
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Missing `term` or `weight`."),
+                            ),
+                        )
+                        .await;
+                    return;
+                };
+                if weight <= 0.0 || weight > 1.5 {
+                    let _ = cmd
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Weight must be in the range (0.0, 1.5]."),
+                            ),
+                        )
+                        .await;
+                    return;
+                }
+                appender
+                    .append(&LexiconProposal {
+                        term: term.clone(),
+                        weight: weight as f32,
+                        rationale: None,
+                        source_ids: vec![],
+                    })
+                    .map(|()| format!("Added \"{term}\" ({weight}) to the lexicon."))
+                    .map_err(anyhow::Error::from)
             }
+            ("add", "affirmation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .append_affirmation(&pattern)
+                    .map(|()| format!("Added affirmation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("add", "negation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .append_negation(&pattern)
+                    .map(|()| format!("Added negation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "term") => {
+                let term = string_opt(opts, "term");
+                let Some(term) = term else { return };
+                appender
+                    .remove_term(&term)
+                    .map(|()| format!("Removed \"{term}\" from the lexicon."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "affirmation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .remove_affirmation(&pattern)
+                    .map(|()| format!("Removed affirmation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "negation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .remove_negation(&pattern)
+                    .map(|()| format!("Removed negation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            _ => return,
+        };
+
+        let content = match result {
+            Ok(msg) => msg,
             Err(e) => {
-                error!("lexicon append failed: {e}");
-                let _ = cmd
-                    .create_response(
-                        &ctx.http,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .content("Failed to write to lexicon file — check logs."),
-                        ),
-                    )
-                    .await;
+                error!("lexicon operation failed: {e}");
+                "Failed to update lexicon file — check logs.".to_string()
             }
-        }
+        };
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new().content(content),
+                ),
+            )
+            .await;
     }
 
     async fn resolve_thread(
@@ -449,6 +576,16 @@ impl Handler {
 
         Ok(thread.id)
     }
+}
+
+fn string_opt(opts: &[serenity::all::CommandDataOption], name: &str) -> Option<String> {
+    opts.iter().find(|o| o.name == name).and_then(|o| {
+        if let CommandDataOptionValue::String(s) = &o.value {
+            Some(s.clone())
+        } else {
+            None
+        }
+    })
 }
 
 /// Distill a thread's Redis history into long-term memory. Tracks a per-thread high-water mark
