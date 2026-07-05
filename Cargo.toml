@@ -27,6 +27,4 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 async-trait = "0.1"
-# Long-term memory. Exact `=` pin: 0.5.0 is the first stable, and pinning keeps
-# distiller behavior reproducible across the bot's deploy hosts.
-context-forge = { version = "=0.6.0", features = ["distill-http"] }
+context-forge = { version = "0.8.1", features = ["distill-http", "semantic"] }

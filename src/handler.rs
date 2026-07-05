@@ -3,14 +3,35 @@ use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{ChunkingDistiller, ContextEntry, ContextForge, SaveOptions};
-use serenity::all::{
-    AutoArchiveDuration, Channel, ChannelType, Context, CreateMessage, CreateThread, EditThread,
-    EventHandler, GuildChannel, GuildId, Message,
+use context_forge::{
+    ChunkingDistiller, ConfigLexiconScorer, ContextEntry, ContextForge, LexiconAppender,
+    LexiconProposal, LexiconScorer, SaveOptions,
 };
-use std::sync::Arc;
+use serenity::all::{
+    AutoArchiveDuration, Channel, ChannelType, Command, CommandDataOptionValue, CommandInteraction,
+    CommandOptionType, Context, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseMessage, CreateMessage, CreateThread, EditInteractionResponse,
+    EditThread, EventHandler, GuildChannel, GuildId, Interaction, Message, Ready,
+};
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tracing::{error, warn};
+
+/// Thin wrapper that lets the running scorer be swapped without restarting.
+/// Context-forge holds a stable `Arc<dyn LexiconScorer>`; we update the inner
+/// value after every `/lexicon` write so memory recall picks up changes immediately.
+pub struct HotSwapScorer(pub Arc<RwLock<Option<ConfigLexiconScorer>>>);
+
+impl LexiconScorer for HotSwapScorer {
+    fn score(&self, entry: &ContextEntry, query: &str) -> f32 {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map_or(0.0, |s| s.score(entry, query))
+    }
+}
 
 pub struct BotData {
     pub redis: Mutex<RedisState>,
@@ -25,11 +46,12 @@ pub struct BotData {
     pub searxng_url: Option<String>,
     pub system_prompt: String,
     pub http: reqwest::Client,
-    /// Long-term memory store. Sync (rusqlite) — every call goes through `spawn_blocking`.
     pub cf: Arc<ContextForge>,
-    /// Distiller pointed at the bot's own Ollama endpoint. Also sync. Chunking wrapper
-    /// bounds per-call prompt size; coerces to `&dyn Distiller` for `distill_and_save`.
     pub distiller: Arc<ChunkingDistiller<OpenAiCompatDistiller>>,
+    /// Path to the persona lexicon TOML file, or `None` when `LEXICON_CONFIG` is unset.
+    pub lexicon_path: Option<PathBuf>,
+    /// Live scorer — swapped in-place after every `/lexicon` write; no restart needed.
+    pub live_scorer: Arc<RwLock<Option<ConfigLexiconScorer>>>,
 }
 
 pub struct Handler {
@@ -44,18 +66,6 @@ impl EventHandler for Handler {
         }
 
         let bot_id = ctx.cache.current_user().id;
-        let stripped = strip_bot_mention(&msg.content, bot_id.get());
-
-        // `!remember` is an explicit command and does not require a mention.
-        if stripped.eq_ignore_ascii_case("!remember") {
-            if let Err(e) = self.handle_remember(&ctx, &msg).await {
-                error!(
-                    "error handling !remember in channel {}: {:?}",
-                    msg.channel_id, e
-                );
-            }
-            return;
-        }
 
         // Every other message must mention the bot to get a response.
         if !msg.mentions.iter().any(|u| u.id == bot_id) {
@@ -97,6 +107,44 @@ impl EventHandler for Handler {
             Ok(Some(n)) => tracing::info!("archive-distilled thread {thread_id}: {n} entries"),
             Ok(None) => {}
             Err(e) => error!("distill on archive failed for thread {thread_id}: {e:?}"),
+        }
+    }
+
+    async fn ready(&self, ctx: Context, _ready: Ready) {
+        // Set DEV_GUILD_ID in .env to register commands to one guild instantly (no propagation
+        // delay). Leave it unset for global registration (~1 h to propagate to all guilds).
+        let dev_guild_id = std::env::var("DEV_GUILD_ID")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+
+        let commands = slash_commands();
+
+        if let Some(guild_id) = dev_guild_id {
+            let gid = GuildId::new(guild_id);
+            for cmd in commands {
+                if let Err(e) = gid.create_command(&ctx.http, cmd).await {
+                    error!("failed to register command to guild {guild_id}: {e}");
+                }
+            }
+            tracing::info!("registered slash commands to dev guild {guild_id}");
+        } else {
+            for cmd in commands {
+                if let Err(e) = Command::create_global_command(&ctx.http, cmd).await {
+                    error!("failed to register global command: {e}");
+                }
+            }
+            tracing::info!("registered slash commands globally");
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let Interaction::Command(cmd) = interaction else {
+            return;
+        };
+        match cmd.data.name.as_str() {
+            "remember" => self.handle_slash_remember(&ctx, &cmd).await,
+            "lexicon" => self.handle_slash_lexicon(&ctx, &cmd).await,
+            _ => {}
         }
     }
 }
@@ -187,36 +235,58 @@ impl Handler {
         }
     }
 
-    /// Manual `!remember`: distill the current thread, archive it, and report.
-    async fn handle_remember(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let channel = msg.channel_id.to_channel(&ctx.http).await?;
+    async fn handle_slash_remember(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!("defer failed for /remember: {e}");
+            return;
+        }
+
+        let channel = match cmd.channel_id.to_channel(&ctx.http).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("channel fetch failed for /remember: {e}");
+                return;
+            }
+        };
+
         let in_thread = matches!(
             &channel,
             Channel::Guild(gc)
                 if matches!(gc.kind, ChannelType::PublicThread | ChannelType::PrivateThread)
         );
+
         if !in_thread {
-            msg.channel_id
-                .send_message(
+            let _ = cmd
+                .edit_response(
                     &ctx.http,
-                    CreateMessage::new().content(
-                        "`!remember` works inside a conversation thread — mention me to start one first.",
-                    ),
+                    EditInteractionResponse::new()
+                        .content("Use `/remember` inside a conversation thread."),
                 )
-                .await?;
-            return Ok(());
+                .await;
+            return;
         }
 
-        let guild_id = match msg.guild_id {
+        let guild_id = match cmd.guild_id {
             Some(g) => g.get(),
-            None => return Ok(()),
+            None => return,
         };
-        let thread_id = msg.channel_id.get();
+        let thread_id = cmd.channel_id.get();
 
-        let outcome = distill_thread(&self.data, guild_id, thread_id).await?;
+        let outcome = match distill_thread(&self.data, guild_id, thread_id).await {
+            Ok(o) => o,
+            Err(e) => {
+                error!("distill_thread failed for /remember: {e}");
+                let _ = cmd
+                    .edit_response(
+                        &ctx.http,
+                        EditInteractionResponse::new().content("Distillation failed — check logs."),
+                    )
+                    .await;
+                return;
+            }
+        };
 
-        // Close the thread out — "we're done here".
-        let _ = msg
+        let _ = cmd
             .channel_id
             .edit_thread(&ctx.http, EditThread::new().archived(true))
             .await;
@@ -227,10 +297,164 @@ impl Handler {
             }
             None => "Nothing new to remember in this thread.".to_string(),
         };
-        msg.channel_id
-            .send_message(&ctx.http, CreateMessage::new().content(reply))
-            .await?;
-        Ok(())
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().content(reply))
+            .await;
+    }
+
+    async fn handle_slash_lexicon(&self, ctx: &Context, cmd: &CommandInteraction) {
+        let Some(ref path) = self.data.lexicon_path else {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new().content(
+                            "No lexicon file configured — set `LEXICON_CONFIG` to enable this command.",
+                        ),
+                    ),
+                )
+                .await;
+            return;
+        };
+
+        // Structure: group (add/remove) → subcommand (term/affirmation/negation) → options
+        let group = match cmd.data.options.first() {
+            Some(g) => g,
+            None => return,
+        };
+        let subs = match &group.value {
+            CommandDataOptionValue::SubCommandGroup(subs) => subs,
+            _ => return,
+        };
+        let sub = match subs.first() {
+            Some(s) => s,
+            None => return,
+        };
+        let opts = match &sub.value {
+            CommandDataOptionValue::SubCommand(opts) => opts,
+            _ => return,
+        };
+
+        let appender = LexiconAppender::new(path.clone());
+
+        let result: Result<String> = match (group.name.as_str(), sub.name.as_str()) {
+            ("add", "term") => {
+                let term = opts.iter().find(|o| o.name == "term").and_then(|o| {
+                    if let CommandDataOptionValue::String(s) = &o.value {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                });
+                let weight = opts.iter().find(|o| o.name == "weight").and_then(|o| {
+                    if let CommandDataOptionValue::Number(n) = &o.value {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                });
+                let (Some(term), Some(weight)) = (term, weight) else {
+                    let _ = cmd
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Missing `term` or `weight`."),
+                            ),
+                        )
+                        .await;
+                    return;
+                };
+                if weight <= 0.0 || weight > 1.5 {
+                    let _ = cmd
+                        .create_response(
+                            &ctx.http,
+                            CreateInteractionResponse::Message(
+                                CreateInteractionResponseMessage::new()
+                                    .content("Weight must be in the range (0.0, 1.5]."),
+                            ),
+                        )
+                        .await;
+                    return;
+                }
+                appender
+                    .append(&LexiconProposal {
+                        term: term.clone(),
+                        weight,
+                        rationale: None,
+                        source_ids: vec![],
+                    })
+                    .map(|()| format!("Added \"{term}\" ({weight}) to the lexicon."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("add", "affirmation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .append_affirmation(&pattern)
+                    .map(|()| format!("Added affirmation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("add", "negation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .append_negation(&pattern)
+                    .map(|()| format!("Added negation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "term") => {
+                let term = string_opt(opts, "term");
+                let Some(term) = term else { return };
+                appender
+                    .remove_term(&term)
+                    .map(|()| format!("Removed \"{term}\" from the lexicon."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "affirmation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .remove_affirmation(&pattern)
+                    .map(|()| format!("Removed affirmation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            ("remove", "negation") => {
+                let pattern = string_opt(opts, "pattern");
+                let Some(pattern) = pattern else { return };
+                appender
+                    .remove_negation(&pattern)
+                    .map(|()| format!("Removed negation pattern \"{pattern}\"."))
+                    .map_err(anyhow::Error::from)
+            }
+            _ => return,
+        };
+
+        let content = match result {
+            Ok(msg) => {
+                // Reload the scorer so the running engine sees the change immediately.
+                match ConfigLexiconScorer::from_file(path) {
+                    Ok(scorer) => match self.data.live_scorer.write() {
+                        Ok(mut g) => *g = Some(scorer),
+                        Err(e) => warn!("scorer lock poisoned after lexicon write: {e}"),
+                    },
+                    Err(e) => warn!("scorer reload failed after lexicon update: {e}"),
+                }
+                msg
+            }
+            Err(e) => {
+                error!("lexicon operation failed: {e}");
+                "Failed to update lexicon file — check logs.".to_string()
+            }
+        };
+        let _ = cmd
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new().content(content),
+                ),
+            )
+            .await;
     }
 
     async fn resolve_thread(
@@ -273,6 +497,137 @@ impl Handler {
 
         Ok(thread.id)
     }
+}
+
+fn slash_commands() -> Vec<CreateCommand> {
+    vec![
+        CreateCommand::new("remember")
+            .description("Distill this thread into long-term memory and archive it."),
+        CreateCommand::new("lexicon")
+            .description("Manage the persona lexicon.")
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::SubCommandGroup,
+                    "add",
+                    "Add an entry to the lexicon",
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "term",
+                        "Add a weighted term",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "term",
+                            "Term or phrase to add",
+                        )
+                        .required(true),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::Number,
+                            "weight",
+                            "Importance weight between 0.0 and 1.5",
+                        )
+                        .required(true),
+                    ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "affirmation",
+                        "Add an affirmation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to add",
+                        )
+                        .required(true),
+                    ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "negation",
+                        "Add a negation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to add",
+                        )
+                        .required(true),
+                    ),
+                ),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::SubCommandGroup,
+                    "remove",
+                    "Remove an entry from the lexicon",
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "term",
+                        "Remove a weighted term",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "term",
+                            "Term to remove",
+                        )
+                        .required(true),
+                    ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "affirmation",
+                        "Remove an affirmation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to remove",
+                        )
+                        .required(true),
+                    ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "negation",
+                        "Remove a negation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to remove",
+                        )
+                        .required(true),
+                    ),
+                ),
+            ),
+    ]
+}
+
+fn string_opt(opts: &[serenity::all::CommandDataOption], name: &str) -> Option<String> {
+    opts.iter().find(|o| o.name == name).and_then(|o| {
+        if let CommandDataOptionValue::String(s) = &o.value {
+            Some(s.clone())
+        } else {
+            None
+        }
+    })
 }
 
 /// Distill a thread's Redis history into long-term memory. Tracks a per-thread high-water mark
@@ -373,4 +728,105 @@ fn strip_bot_mention(content: &str, bot_id: u64) -> String {
         .replace(&mention_nick, "")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- strip_bot_mention ---
+
+    #[test]
+    fn strip_mention_standard() {
+        // The token is removed but internal whitespace is not collapsed — that's expected.
+        assert_eq!(strip_bot_mention("hello <@123> world", 123), "hello  world");
+    }
+
+    #[test]
+    fn strip_mention_nick_form() {
+        assert_eq!(strip_bot_mention("hey <@!123>", 123), "hey");
+    }
+
+    #[test]
+    fn strip_mention_ignores_other_id() {
+        assert_eq!(strip_bot_mention("ping <@999>", 123), "ping <@999>");
+    }
+
+    #[test]
+    fn strip_mention_trims_surrounding_whitespace() {
+        assert_eq!(
+            strip_bot_mention("  <@123>  what time is it", 123),
+            "what time is it"
+        );
+    }
+
+    // --- truncate ---
+
+    #[test]
+    fn truncate_short_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exactly_at_limit_unchanged() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_over_limit_gets_ellipsis() {
+        assert_eq!(truncate("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn truncate_trims_whitespace_before_measuring() {
+        assert_eq!(truncate("  hi  ", 10), "hi");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 5), "");
+    }
+
+    // --- HotSwapScorer ---
+
+    #[test]
+    fn hotswap_none_scores_zero() {
+        let scorer = HotSwapScorer(Arc::new(RwLock::new(None)));
+        let entry = ContextEntry {
+            id: "t".into(),
+            content: "for the emperor".into(),
+            timestamp: 0,
+            kind: "fact".into(),
+            scope: None,
+            session_id: None,
+            token_count: None,
+            metadata: None,
+        };
+        assert_eq!(scorer.score(&entry, ""), 0.0);
+    }
+
+    #[test]
+    fn hotswap_swap_is_visible_immediately() {
+        let inner = Arc::new(RwLock::new(None::<ConfigLexiconScorer>));
+        let scorer = HotSwapScorer(inner.clone());
+        let entry = ContextEntry {
+            id: "t".into(),
+            content: "for the emperor".into(),
+            timestamp: 0,
+            kind: "fact".into(),
+            scope: None,
+            session_id: None,
+            token_count: None,
+            metadata: None,
+        };
+
+        assert_eq!(scorer.score(&entry, ""), 0.0);
+
+        let loaded: ConfigLexiconScorer = "[affirmations]\npatterns = [\"for the emperor\"]"
+            .parse()
+            .unwrap();
+        *inner.write().unwrap() = Some(loaded);
+
+        assert!(scorer.score(&entry, "") > 0.0);
+    }
 }

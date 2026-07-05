@@ -12,7 +12,7 @@ The bot itself is persona-agnostic — its identity is entirely the `PERSONA` yo
 - **Two-tier memory.**
   - *Hot:* per-thread history in Redis (24h+ window).
   - *Long-term:* [context-forge](https://crates.io/crates/context-forge) (local SQLite + FTS5 BM25). Threads are distilled into a summary + facts and recalled into future threads, scoped to the server. Secrets are scrubbed before anything is stored, and retrieved memory is injected as clearly-labeled reference data, never as instructions.
-- **`!remember`.** Post `!remember` in a thread to distill it to long-term memory immediately and archive it.
+- **`/remember`.** Use `/remember` in a thread to distill it to long-term memory immediately and archive it.
 - **Web search (optional).** When a SearXNG instance is configured, the model invokes a search tool on its own when a query needs current information. Omit it and the bot runs fine without web search.
 - **Configurable persona.** The system prompt is the `PERSONA` env var — set it to whatever character or assistant you want.
 
@@ -91,6 +91,25 @@ PERSONA="You are a terse, dry assistant in a friends' Discord. Answer directly. 
 
 Update `.env` and `docker compose restart husk` to change it; no rebuild needed.
 
+### Persona lexicon (optional)
+
+Set `LEXICON_CONFIG` to a TOML file path. On startup, if the file doesn't exist the bot generates it automatically by asking the configured LLM to derive weighted terms from the `PERSONA`. The lexicon biases long-term memory recall toward domain-relevant entries — entries containing your persona's key nouns and speech patterns rank higher in the token-budget cut.
+
+**Model quality matters for the auto-bootstrap.** A small or low-reasoning local model will produce a sparse, poorly-weighted lexicon. If your wired model is weak, generate the file manually instead: the [context-forge lexicon bootstrapping guide](https://github.com/asvarnon/context-forge#bootstrapping-a-persona-lexicon-with-an-llm) has the full prompt template in a copy-paste block — substitute your `PERSONA`, run it through Claude, ChatGPT, or any capable model in a browser, and save the TOML response to your `LEXICON_CONFIG` path. The bot skips the auto-bootstrap if the file already exists, so a manually generated file is used as-is.
+
+Add or remove entries live with the `/lexicon` slash command:
+
+```
+/lexicon add term        term:Battle-Sister weight:0.7
+/lexicon add affirmation pattern:for the Emperor
+/lexicon add negation    pattern:scrapcode
+/lexicon remove term        term:Battle-Sister
+/lexicon remove affirmation pattern:for the Emperor
+/lexicon remove negation    pattern:scrapcode
+```
+
+Changes take effect immediately — no restart needed.
+
 ### Web search (optional)
 
 Web search is off unless `SEARXNG_URL` is set. To enable it you need a reachable
@@ -120,7 +139,19 @@ setup. Leave `SEARXNG_URL` unset and the bot starts normally with web search dis
 
 ### Discord permissions
 
-The bot's role needs **Send Messages**, **Create Public Threads**, and **Send Messages in Threads**, plus **Manage Threads** so `!remember` can archive a thread after committing it.
+The bot's role needs **Send Messages**, **Create Public Threads**, **Send Messages in Threads**, and **Use Application Commands**, plus **Manage Threads** so `/remember` can archive a thread after committing it.
+
+### Testing slash commands locally
+
+Global slash commands take up to one hour to propagate across all Discord servers. During local development, set `DEV_GUILD_ID` in `.env` to your test server's ID and the bot will register commands to that guild only — changes appear in seconds.
+
+```env
+DEV_GUILD_ID=123456789012345678
+```
+
+To get your server ID: Discord → Settings → Advanced → enable **Developer Mode**, then right-click your test server → **Copy Server ID**.
+
+Remove `DEV_GUILD_ID` (or comment it out) before deploying to production. Global commands persist across restarts; guild commands are re-registered every time the bot connects.
 
 ## Build from source
 

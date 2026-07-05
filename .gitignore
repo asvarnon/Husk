@@ -7,3 +7,4 @@
 .claude/agents/
 dev.ps1
 docker-compose.dev.yml
+lexicon.toml
