@@ -93,137 +93,29 @@ impl EventHandler for Handler {
     }
 
     async fn ready(&self, ctx: Context, _ready: Ready) {
-        // Global commands propagate to all guilds within ~1 h. For faster local dev, swap to
-        // guild_id.create_command with a hardcoded guild ID, then revert before shipping.
-        if let Err(e) = Command::create_global_command(
-            &ctx.http,
-            CreateCommand::new("remember")
-                .description("Distill this thread into long-term memory and archive it."),
-        )
-        .await
-        {
-            error!("failed to register /remember: {e}");
-        }
-        if let Err(e) = Command::create_global_command(
-            &ctx.http,
-            CreateCommand::new("lexicon")
-                .description("Manage the persona lexicon.")
-                .add_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::SubCommandGroup,
-                        "add",
-                        "Add an entry to the lexicon",
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "term",
-                            "Add a weighted term",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "term",
-                                "Term or phrase to add",
-                            )
-                            .required(true),
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::Number,
-                                "weight",
-                                "Importance weight between 0.0 and 1.5",
-                            )
-                            .required(true),
-                        ),
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "affirmation",
-                            "Add an affirmation pattern",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "pattern",
-                                "Pattern to add",
-                            )
-                            .required(true),
-                        ),
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "negation",
-                            "Add a negation pattern",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "pattern",
-                                "Pattern to add",
-                            )
-                            .required(true),
-                        ),
-                    ),
-                )
-                .add_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::SubCommandGroup,
-                        "remove",
-                        "Remove an entry from the lexicon",
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "term",
-                            "Remove a weighted term",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "term",
-                                "Term to remove",
-                            )
-                            .required(true),
-                        ),
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "affirmation",
-                            "Remove an affirmation pattern",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "pattern",
-                                "Pattern to remove",
-                            )
-                            .required(true),
-                        ),
-                    )
-                    .add_sub_option(
-                        CreateCommandOption::new(
-                            CommandOptionType::SubCommand,
-                            "negation",
-                            "Remove a negation pattern",
-                        )
-                        .add_sub_option(
-                            CreateCommandOption::new(
-                                CommandOptionType::String,
-                                "pattern",
-                                "Pattern to remove",
-                            )
-                            .required(true),
-                        ),
-                    ),
-                ),
-        )
-        .await
-        {
-            error!("failed to register /lexicon: {e}");
+        // Set DEV_GUILD_ID in .env to register commands to one guild instantly (no propagation
+        // delay). Leave it unset for global registration (~1 h to propagate to all guilds).
+        let dev_guild_id = std::env::var("DEV_GUILD_ID")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+
+        let commands = slash_commands();
+
+        if let Some(guild_id) = dev_guild_id {
+            let gid = GuildId::new(guild_id);
+            for cmd in commands {
+                if let Err(e) = gid.create_command(&ctx.http, cmd).await {
+                    error!("failed to register command to guild {guild_id}: {e}");
+                }
+            }
+            tracing::info!("registered slash commands to dev guild {guild_id}");
+        } else {
+            for cmd in commands {
+                if let Err(e) = Command::create_global_command(&ctx.http, cmd).await {
+                    error!("failed to register global command: {e}");
+                }
+            }
+            tracing::info!("registered slash commands globally");
         }
     }
 
@@ -576,6 +468,75 @@ impl Handler {
 
         Ok(thread.id)
     }
+}
+
+fn slash_commands() -> Vec<CreateCommand> {
+    vec![
+        CreateCommand::new("remember")
+            .description("Distill this thread into long-term memory and archive it."),
+        CreateCommand::new("lexicon")
+            .description("Manage the persona lexicon.")
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::SubCommandGroup,
+                    "add",
+                    "Add an entry to the lexicon",
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "term", "Add a weighted term")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "term", "Term or phrase to add")
+                                .required(true),
+                        )
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::Number, "weight", "Importance weight between 0.0 and 1.5")
+                                .required(true),
+                        ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "affirmation", "Add an affirmation pattern")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to add")
+                                .required(true),
+                        ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "negation", "Add a negation pattern")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to add")
+                                .required(true),
+                        ),
+                ),
+            )
+            .add_option(
+                CreateCommandOption::new(
+                    CommandOptionType::SubCommandGroup,
+                    "remove",
+                    "Remove an entry from the lexicon",
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "term", "Remove a weighted term")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "term", "Term to remove")
+                                .required(true),
+                        ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "affirmation", "Remove an affirmation pattern")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to remove")
+                                .required(true),
+                        ),
+                )
+                .add_sub_option(
+                    CreateCommandOption::new(CommandOptionType::SubCommand, "negation", "Remove a negation pattern")
+                        .add_sub_option(
+                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to remove")
+                                .required(true),
+                        ),
+                ),
+            ),
+    ]
 }
 
 fn string_opt(opts: &[serenity::all::CommandDataOption], name: &str) -> Option<String> {
