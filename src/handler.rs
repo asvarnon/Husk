@@ -4,7 +4,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
 use context_forge::{
-    ChunkingDistiller, ContextEntry, ContextForge, LexiconAppender, LexiconProposal, SaveOptions,
+    ChunkingDistiller, ConfigLexiconScorer, ContextEntry, ContextForge, LexiconAppender,
+    LexiconProposal, LexiconScorer, SaveOptions,
 };
 use serenity::all::{
     AutoArchiveDuration, Channel, ChannelType, Command, CommandDataOptionValue, CommandInteraction,
@@ -13,9 +14,24 @@ use serenity::all::{
     EditThread, EventHandler, GuildChannel, GuildId, Interaction, Message, Ready,
 };
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tracing::{error, warn};
+
+/// Thin wrapper that lets the running scorer be swapped without restarting.
+/// Context-forge holds a stable `Arc<dyn LexiconScorer>`; we update the inner
+/// value after every `/lexicon` write so memory recall picks up changes immediately.
+pub struct HotSwapScorer(pub Arc<RwLock<Option<ConfigLexiconScorer>>>);
+
+impl LexiconScorer for HotSwapScorer {
+    fn score(&self, entry: &ContextEntry, query: &str) -> f32 {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map_or(0.0, |s| s.score(entry, query))
+    }
+}
 
 pub struct BotData {
     pub redis: Mutex<RedisState>,
@@ -34,6 +50,8 @@ pub struct BotData {
     pub distiller: Arc<ChunkingDistiller<OpenAiCompatDistiller>>,
     /// Path to the persona lexicon TOML file, or `None` when `LEXICON_CONFIG` is unset.
     pub lexicon_path: Option<PathBuf>,
+    /// Live scorer — swapped in-place after every `/lexicon` write; no restart needed.
+    pub live_scorer: Arc<RwLock<Option<ConfigLexiconScorer>>>,
 }
 
 pub struct Handler {
@@ -412,7 +430,17 @@ impl Handler {
         };
 
         let content = match result {
-            Ok(msg) => msg,
+            Ok(msg) => {
+                // Reload the scorer so the running engine sees the change immediately.
+                match ConfigLexiconScorer::from_file(path) {
+                    Ok(scorer) => match self.data.live_scorer.write() {
+                        Ok(mut g) => *g = Some(scorer),
+                        Err(e) => warn!("scorer lock poisoned after lexicon write: {e}"),
+                    },
+                    Err(e) => warn!("scorer reload failed after lexicon update: {e}"),
+                }
+                msg
+            }
             Err(e) => {
                 error!("lexicon operation failed: {e}");
                 "Failed to update lexicon file — check logs.".to_string()

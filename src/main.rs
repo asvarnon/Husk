@@ -5,12 +5,12 @@ mod search;
 
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
 use context_forge::{bootstrap_prompt, ChunkingDistiller, Config, ConfigLexiconScorer, ContextForge};
-use handler::{distill_thread, BotData, Handler};
+use handler::{distill_thread, BotData, Handler, HotSwapScorer};
 use redis::{now_unix, RedisState};
 use serenity::all::GatewayIntents;
 use serenity::Client;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
@@ -177,11 +177,14 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let mut builder = ContextForge::builder(cf_config).with_embedding_model(&model_cache);
-    if let Some(scorer) = persona_scorer {
-        builder = builder.with_persona_scorer(scorer);
-    }
-    let cf = Arc::new(builder.build().await?);
+    let live_scorer = Arc::new(RwLock::new(persona_scorer));
+    let cf = Arc::new(
+        ContextForge::builder(cf_config)
+            .with_embedding_model(&model_cache)
+            .with_persona_scorer(HotSwapScorer(live_scorer.clone()))
+            .build()
+            .await?,
+    );
     let embedded = cf
         .backfill_embeddings(32, |done, total| {
             tracing::info!(done, total, "embedding backfill");
@@ -216,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
         cf,
         distiller,
         lexicon_path,
+        live_scorer,
     });
 
     // Idle sweep: the PRIMARY distill trigger. Distills threads that went quiet ~30 min ago while
