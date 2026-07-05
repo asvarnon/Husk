@@ -4,7 +4,7 @@ mod redis;
 mod search;
 
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{ChunkingDistiller, Config, ContextForge};
+use context_forge::{bootstrap_prompt, ChunkingDistiller, Config, ConfigLexiconScorer, ContextForge};
 use handler::{distill_thread, BotData, Handler};
 use redis::{now_unix, RedisState};
 use serenity::all::GatewayIntents;
@@ -79,6 +79,13 @@ async fn main() -> anyhow::Result<()> {
     }
     let system_prompt: String = std::env::var("PERSONA").expect("No Persona set.");
 
+    let lexicon_path: Option<PathBuf> = std::env::var("LEXICON_CONFIG")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+
+    let http = reqwest::Client::new();
+
     // Long-term memory store (context-forge). Durable path on the host running the bot.
     let db_path = std::env::var("CONTEXT_FORGE_DB").unwrap_or_else(|_| {
         let home = std::env::var("HOME")
@@ -86,19 +93,103 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| ".".to_string());
         format!("{home}/.context-forge/discord.db")
     });
-    if let Some(parent) = PathBuf::from(&db_path).parent() {
+    let db_path_buf = PathBuf::from(&db_path);
+    if let Some(parent) = db_path_buf.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let model_cache = db_path_buf
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("models");
     // Config is #[non_exhaustive] — must build via Default then mutate (no struct literal).
     #[allow(clippy::field_reassign_with_default)]
     let cf_config = {
         let mut c = Config::default();
-        c.db_path = PathBuf::from(&db_path);
+        c.db_path = db_path_buf;
         c.recency_half_life_secs = 2_592_000.0; // 30d — historian recall, not recency-biased
         c.max_entries = 50_000;
         c
     };
-    let cf = Arc::new(ContextForge::open(cf_config).await?);
+    let persona_scorer: Option<ConfigLexiconScorer> = if let Some(ref path) = lexicon_path {
+        if path.exists() {
+            match ConfigLexiconScorer::from_file(path) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("failed to load lexicon from {path:?}: {e}");
+                    None
+                }
+            }
+        } else {
+            let prompt = bootstrap_prompt(&system_prompt);
+            let result: anyhow::Result<ConfigLexiconScorer> = async {
+                let body = serde_json::json!({
+                    "model": &llm_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": false
+                });
+                let mut req = http
+                    .post(format!("{llm_base_url}/v1/chat/completions"))
+                    .json(&body);
+                if let Some(ref key) = llm_api_key {
+                    req = req.bearer_auth(key);
+                }
+                let val: serde_json::Value = req.send().await?.json().await?;
+                let content = val["choices"][0]["message"]["content"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("no content in bootstrap response"))?;
+                let toml_str = {
+                    let mut in_block = false;
+                    let mut lines: Vec<&str> = Vec::new();
+                    for line in content.lines() {
+                        if !in_block && line.trim_start().starts_with("```toml") {
+                            in_block = true;
+                            continue;
+                        }
+                        if in_block {
+                            if line.trim() == "```" {
+                                break;
+                            }
+                            lines.push(line);
+                        }
+                    }
+                    if lines.is_empty() {
+                        return Err(anyhow::anyhow!("no TOML block in bootstrap response"));
+                    }
+                    lines.join("\n")
+                };
+                let scorer = toml_str
+                    .parse::<ConfigLexiconScorer>()
+                    .map_err(|e| anyhow::anyhow!("lexicon parse error: {e}"))?;
+                std::fs::write(path, &toml_str)?;
+                tracing::info!("lexicon bootstrapped and saved to {path:?}");
+                Ok(scorer)
+            }
+            .await;
+            match result {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("lexicon bootstrap failed, continuing without persona scorer: {e}");
+                    None
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut builder = ContextForge::builder(cf_config).with_embedding_model(&model_cache);
+    if let Some(scorer) = persona_scorer {
+        builder = builder.with_persona_scorer(scorer);
+    }
+    let cf = Arc::new(builder.build().await?);
+    let embedded = cf
+        .backfill_embeddings(32, |done, total| {
+            tracing::info!(done, total, "embedding backfill");
+        })
+        .await?;
+    if embedded > 0 {
+        tracing::info!(embedded, "backfill complete");
+    }
 
     // Distiller points at the SAME backend the bot chats with (its OpenAI-compat /v1 endpoint),
     // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:
@@ -121,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
         llm_api_key,
         searxng_url,
         system_prompt,
-        http: reqwest::Client::new(),
+        http,
         cf,
         distiller,
     });
