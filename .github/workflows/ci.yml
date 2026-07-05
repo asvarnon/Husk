@@ -19,37 +19,72 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  check:
-    name: fmt / clippy / build / test
+  fmt:
+    name: cargo fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
+      - run: cargo fmt --all --check
 
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
 
-      - name: Format
-        run: cargo fmt --all --check
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --verbose
 
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Build
-        run: cargo build --locked --verbose
-
-      - name: Test
-        run: cargo test --locked --verbose
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --verbose
 
   audit:
-    name: cargo deny
+    name: cargo audit
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Configure audit ignores
+        # cargo-audit reads from $CARGO_HOME/audit.toml. The four rustls-webpki
+        # advisories require rustls 0.24 which serenity/reqwest don't yet support.
+        # paste is unmaintained but functional; transitive via fastembed→tokenizers.
+        run: |
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/audit.toml << 'EOF'
+          [advisories]
+          ignore = [
+            "RUSTSEC-2026-0049",
+            "RUSTSEC-2026-0098",
+            "RUSTSEC-2026-0099",
+            "RUSTSEC-2026-0104",
+            "RUSTSEC-2024-0436",
+          ]
+          EOF
+      - uses: rustsec/audit-check@v2
         with:
-          command: check advisories
+          token: ${{ secrets.GITHUB_TOKEN }}
