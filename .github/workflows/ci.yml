@@ -46,11 +46,10 @@ jobs:
         run: cargo test --locked --verbose
 
   audit:
-    name: cargo audit
+    name: cargo deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          tool: cargo-audit
-      - run: cargo audit --config audit.toml
+          command: check advisories

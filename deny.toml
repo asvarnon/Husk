@@ -1,0 +1,28 @@
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+unmaintained = "warn"
+unsound = "warn"
+
+# rustls-webpki 0.103.x fixes these four advisories, but serenity and reqwest
+# both pin rustls to 0.23, which pulls webpki 0.102.8. Moving to 0.103.x
+# requires rustls 0.24 — a breaking upgrade that needs upstream crate changes.
+# None of these are reachable: the bot makes outbound TLS connections only,
+# never parses CRLs, and all bugs require CA misissuance to trigger.
+# Revisit when serenity or reqwest adopts rustls 0.24.
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0049"
+reason = "CRL distribution point matching bug — bot never uses CRLs; fix blocked on rustls 0.24 adoption upstream"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0098"
+reason = "URI name constraints ignored — requires CA misissuance; fix blocked on rustls 0.24 adoption upstream"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0099"
+reason = "Wildcard name constraint bypass — requires CA misissuance; fix blocked on rustls 0.24 adoption upstream"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0104"
+reason = "CRL parsing panic — bot never parses CRLs; fix blocked on rustls 0.24 adoption upstream"
