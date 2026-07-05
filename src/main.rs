@@ -4,7 +4,9 @@ mod redis;
 mod search;
 
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{bootstrap_prompt, ChunkingDistiller, Config, ConfigLexiconScorer, ContextForge};
+use context_forge::{
+    bootstrap_prompt, ChunkingDistiller, Config, ConfigLexiconScorer, ContextForge,
+};
 use handler::{distill_thread, BotData, Handler, HotSwapScorer};
 use redis::{now_unix, RedisState};
 use serenity::all::GatewayIntents;
@@ -168,7 +170,9 @@ async fn main() -> anyhow::Result<()> {
             match result {
                 Ok(s) => Some(s),
                 Err(e) => {
-                    tracing::warn!("lexicon bootstrap failed, continuing without persona scorer: {e}");
+                    tracing::warn!(
+                        "lexicon bootstrap failed, continuing without persona scorer: {e}"
+                    );
                     None
                 }
             }
@@ -267,26 +271,41 @@ mod tests {
 
     #[test]
     fn normalize_bare_url_unchanged() {
-        assert_eq!(normalize_base_url("http://localhost:8080"), "http://localhost:8080");
+        assert_eq!(
+            normalize_base_url("http://localhost:8080"),
+            "http://localhost:8080"
+        );
     }
 
     #[test]
     fn normalize_strips_trailing_slash() {
-        assert_eq!(normalize_base_url("http://localhost:8080/"), "http://localhost:8080");
+        assert_eq!(
+            normalize_base_url("http://localhost:8080/"),
+            "http://localhost:8080"
+        );
     }
 
     #[test]
     fn normalize_strips_v1_suffix() {
-        assert_eq!(normalize_base_url("http://localhost:8080/v1"), "http://localhost:8080");
+        assert_eq!(
+            normalize_base_url("http://localhost:8080/v1"),
+            "http://localhost:8080"
+        );
     }
 
     #[test]
     fn normalize_strips_v1_and_trailing_slash() {
-        assert_eq!(normalize_base_url("https://api.openai.com/v1/"), "https://api.openai.com");
+        assert_eq!(
+            normalize_base_url("https://api.openai.com/v1/"),
+            "https://api.openai.com"
+        );
     }
 
     #[test]
     fn normalize_trims_whitespace() {
-        assert_eq!(normalize_base_url("  http://localhost:11434  "), "http://localhost:11434");
+        assert_eq!(
+            normalize_base_url("  http://localhost:11434  "),
+            "http://localhost:11434"
+        );
     }
 }

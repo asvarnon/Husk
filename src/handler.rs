@@ -279,8 +279,7 @@ impl Handler {
                 let _ = cmd
                     .edit_response(
                         &ctx.http,
-                        EditInteractionResponse::new()
-                            .content("Distillation failed — check logs."),
+                        EditInteractionResponse::new().content("Distillation failed — check logs."),
                     )
                     .await;
                 return;
@@ -293,7 +292,9 @@ impl Handler {
             .await;
 
         let reply = match outcome {
-            Some(n) => format!("Committed {n} entries to long-term memory and archived this thread."),
+            Some(n) => {
+                format!("Committed {n} entries to long-term memory and archived this thread.")
+            }
             None => "Nothing new to remember in this thread.".to_string(),
         };
         let _ = cmd
@@ -511,29 +512,57 @@ fn slash_commands() -> Vec<CreateCommand> {
                     "Add an entry to the lexicon",
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "term", "Add a weighted term")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "term", "Term or phrase to add")
-                                .required(true),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "term",
+                        "Add a weighted term",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "term",
+                            "Term or phrase to add",
                         )
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::Number, "weight", "Importance weight between 0.0 and 1.5")
-                                .required(true),
-                        ),
+                        .required(true),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::Number,
+                            "weight",
+                            "Importance weight between 0.0 and 1.5",
+                        )
+                        .required(true),
+                    ),
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "affirmation", "Add an affirmation pattern")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to add")
-                                .required(true),
-                        ),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "affirmation",
+                        "Add an affirmation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to add",
+                        )
+                        .required(true),
+                    ),
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "negation", "Add a negation pattern")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to add")
-                                .required(true),
-                        ),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "negation",
+                        "Add a negation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to add",
+                        )
+                        .required(true),
+                    ),
                 ),
             )
             .add_option(
@@ -543,25 +572,49 @@ fn slash_commands() -> Vec<CreateCommand> {
                     "Remove an entry from the lexicon",
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "term", "Remove a weighted term")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "term", "Term to remove")
-                                .required(true),
-                        ),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "term",
+                        "Remove a weighted term",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "term",
+                            "Term to remove",
+                        )
+                        .required(true),
+                    ),
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "affirmation", "Remove an affirmation pattern")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to remove")
-                                .required(true),
-                        ),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "affirmation",
+                        "Remove an affirmation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to remove",
+                        )
+                        .required(true),
+                    ),
                 )
                 .add_sub_option(
-                    CreateCommandOption::new(CommandOptionType::SubCommand, "negation", "Remove a negation pattern")
-                        .add_sub_option(
-                            CreateCommandOption::new(CommandOptionType::String, "pattern", "Pattern to remove")
-                                .required(true),
-                        ),
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "negation",
+                        "Remove a negation pattern",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "pattern",
+                            "Pattern to remove",
+                        )
+                        .required(true),
+                    ),
                 ),
             ),
     ]
@@ -701,7 +754,10 @@ mod tests {
 
     #[test]
     fn strip_mention_trims_surrounding_whitespace() {
-        assert_eq!(strip_bot_mention("  <@123>  what time is it", 123), "what time is it");
+        assert_eq!(
+            strip_bot_mention("  <@123>  what time is it", 123),
+            "what time is it"
+        );
     }
 
     // --- truncate ---
@@ -766,10 +822,9 @@ mod tests {
 
         assert_eq!(scorer.score(&entry, ""), 0.0);
 
-        let loaded: ConfigLexiconScorer =
-            "[affirmations]\npatterns = [\"for the emperor\"]"
-                .parse()
-                .unwrap();
+        let loaded: ConfigLexiconScorer = "[affirmations]\npatterns = [\"for the emperor\"]"
+            .parse()
+            .unwrap();
         *inner.write().unwrap() = Some(loaded);
 
         assert!(scorer.score(&entry, "") > 0.0);
