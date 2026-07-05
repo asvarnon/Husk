@@ -215,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
         http,
         cf,
         distiller,
+        lexicon_path,
     });
 
     // Idle sweep: the PRIMARY distill trigger. Distills threads that went quiet ~30 min ago while

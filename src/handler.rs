@@ -3,11 +3,16 @@ use crate::redis::{RedisState, StoredMessage};
 use anyhow::Result;
 use async_trait::async_trait;
 use context_forge::distill::openai_compat::OpenAiCompatDistiller;
-use context_forge::{ChunkingDistiller, ContextEntry, ContextForge, SaveOptions};
-use serenity::all::{
-    AutoArchiveDuration, Channel, ChannelType, Context, CreateMessage, CreateThread, EditThread,
-    EventHandler, GuildChannel, GuildId, Message,
+use context_forge::{
+    ChunkingDistiller, ContextEntry, ContextForge, LexiconAppender, LexiconProposal, SaveOptions,
 };
+use serenity::all::{
+    AutoArchiveDuration, Channel, ChannelType, Command, CommandDataOptionValue, CommandInteraction,
+    CommandOptionType, Context, CreateCommand, CreateCommandOption, CreateInteractionResponse,
+    CreateInteractionResponseMessage, CreateMessage, CreateThread, EditInteractionResponse,
+    EditThread, EventHandler, GuildChannel, GuildId, Interaction, Message, Ready,
+};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, warn};
@@ -25,11 +30,10 @@ pub struct BotData {
     pub searxng_url: Option<String>,
     pub system_prompt: String,
     pub http: reqwest::Client,
-    /// Long-term memory store. Sync (rusqlite) — every call goes through `spawn_blocking`.
     pub cf: Arc<ContextForge>,
-    /// Distiller pointed at the bot's own Ollama endpoint. Also sync. Chunking wrapper
-    /// bounds per-call prompt size; coerces to `&dyn Distiller` for `distill_and_save`.
     pub distiller: Arc<ChunkingDistiller<OpenAiCompatDistiller>>,
+    /// Path to the persona lexicon TOML file, or `None` when `LEXICON_CONFIG` is unset.
+    pub lexicon_path: Option<PathBuf>,
 }
 
 pub struct Handler {
@@ -44,18 +48,6 @@ impl EventHandler for Handler {
         }
 
         let bot_id = ctx.cache.current_user().id;
-        let stripped = strip_bot_mention(&msg.content, bot_id.get());
-
-        // `!remember` is an explicit command and does not require a mention.
-        if stripped.eq_ignore_ascii_case("!remember") {
-            if let Err(e) = self.handle_remember(&ctx, &msg).await {
-                error!(
-                    "error handling !remember in channel {}: {:?}",
-                    msg.channel_id, e
-                );
-            }
-            return;
-        }
 
         // Every other message must mention the bot to get a response.
         if !msg.mentions.iter().any(|u| u.id == bot_id) {
@@ -97,6 +89,63 @@ impl EventHandler for Handler {
             Ok(Some(n)) => tracing::info!("archive-distilled thread {thread_id}: {n} entries"),
             Ok(None) => {}
             Err(e) => error!("distill on archive failed for thread {thread_id}: {e:?}"),
+        }
+    }
+
+    async fn ready(&self, ctx: Context, _ready: Ready) {
+        // Global commands propagate to all guilds within ~1 h. For faster local dev, swap to
+        // guild_id.create_command with a hardcoded guild ID, then revert before shipping.
+        if let Err(e) = Command::create_global_command(
+            &ctx.http,
+            CreateCommand::new("remember")
+                .description("Distill this thread into long-term memory and archive it."),
+        )
+        .await
+        {
+            error!("failed to register /remember: {e}");
+        }
+        if let Err(e) = Command::create_global_command(
+            &ctx.http,
+            CreateCommand::new("lexicon")
+                .description("Manage the persona lexicon.")
+                .add_option(
+                    CreateCommandOption::new(
+                        CommandOptionType::SubCommand,
+                        "add",
+                        "Add a term to the lexicon",
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "term",
+                            "Term or phrase to add",
+                        )
+                        .required(true),
+                    )
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::Number,
+                            "weight",
+                            "Importance weight between 0.0 and 1.5",
+                        )
+                        .required(true),
+                    ),
+                ),
+        )
+        .await
+        {
+            error!("failed to register /lexicon: {e}");
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let Interaction::Command(cmd) = interaction else {
+            return;
+        };
+        match cmd.data.name.as_str() {
+            "remember" => self.handle_slash_remember(&ctx, &cmd).await,
+            "lexicon" => self.handle_slash_lexicon(&ctx, &cmd).await,
+            _ => {}
         }
     }
 }
@@ -187,50 +236,177 @@ impl Handler {
         }
     }
 
-    /// Manual `!remember`: distill the current thread, archive it, and report.
-    async fn handle_remember(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let channel = msg.channel_id.to_channel(&ctx.http).await?;
+    async fn handle_slash_remember(&self, ctx: &Context, cmd: &CommandInteraction) {
+        if let Err(e) = cmd.defer(&ctx.http).await {
+            error!("defer failed for /remember: {e}");
+            return;
+        }
+
+        let channel = match cmd.channel_id.to_channel(&ctx.http).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("channel fetch failed for /remember: {e}");
+                return;
+            }
+        };
+
         let in_thread = matches!(
             &channel,
             Channel::Guild(gc)
                 if matches!(gc.kind, ChannelType::PublicThread | ChannelType::PrivateThread)
         );
+
         if !in_thread {
-            msg.channel_id
-                .send_message(
+            let _ = cmd
+                .edit_response(
                     &ctx.http,
-                    CreateMessage::new().content(
-                        "`!remember` works inside a conversation thread — mention me to start one first.",
-                    ),
+                    EditInteractionResponse::new()
+                        .content("Use `/remember` inside a conversation thread."),
                 )
-                .await?;
-            return Ok(());
+                .await;
+            return;
         }
 
-        let guild_id = match msg.guild_id {
+        let guild_id = match cmd.guild_id {
             Some(g) => g.get(),
-            None => return Ok(()),
+            None => return,
         };
-        let thread_id = msg.channel_id.get();
+        let thread_id = cmd.channel_id.get();
 
-        let outcome = distill_thread(&self.data, guild_id, thread_id).await?;
+        let outcome = match distill_thread(&self.data, guild_id, thread_id).await {
+            Ok(o) => o,
+            Err(e) => {
+                error!("distill_thread failed for /remember: {e}");
+                let _ = cmd
+                    .edit_response(
+                        &ctx.http,
+                        EditInteractionResponse::new()
+                            .content("Distillation failed — check logs."),
+                    )
+                    .await;
+                return;
+            }
+        };
 
-        // Close the thread out — "we're done here".
-        let _ = msg
+        let _ = cmd
             .channel_id
             .edit_thread(&ctx.http, EditThread::new().archived(true))
             .await;
 
         let reply = match outcome {
-            Some(n) => {
-                format!("Committed {n} entries to long-term memory and archived this thread.")
-            }
+            Some(n) => format!("Committed {n} entries to long-term memory and archived this thread."),
             None => "Nothing new to remember in this thread.".to_string(),
         };
-        msg.channel_id
-            .send_message(&ctx.http, CreateMessage::new().content(reply))
-            .await?;
-        Ok(())
+        let _ = cmd
+            .edit_response(&ctx.http, EditInteractionResponse::new().content(reply))
+            .await;
+    }
+
+    async fn handle_slash_lexicon(&self, ctx: &Context, cmd: &CommandInteraction) {
+        let sub = match cmd.data.options.first() {
+            Some(s) if s.name == "add" => s,
+            _ => return,
+        };
+
+        let opts = match &sub.value {
+            CommandDataOptionValue::SubCommand(opts) => opts,
+            _ => return,
+        };
+
+        let term = opts
+            .iter()
+            .find(|o| o.name == "term")
+            .and_then(|o| {
+                if let CommandDataOptionValue::String(s) = &o.value {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            });
+
+        let weight = opts
+            .iter()
+            .find(|o| o.name == "weight")
+            .and_then(|o| {
+                if let CommandDataOptionValue::Number(n) = &o.value {
+                    Some(*n)
+                } else {
+                    None
+                }
+            });
+
+        let (Some(term), Some(weight)) = (term, weight) else {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("Missing `term` or `weight`."),
+                    ),
+                )
+                .await;
+            return;
+        };
+
+        let Some(ref path) = self.data.lexicon_path else {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new().content(
+                            "No lexicon file configured — set `LEXICON_CONFIG` to enable this command.",
+                        ),
+                    ),
+                )
+                .await;
+            return;
+        };
+
+        if weight <= 0.0 || weight > 1.5 {
+            let _ = cmd
+                .create_response(
+                    &ctx.http,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("Weight must be in the range (0.0, 1.5]."),
+                    ),
+                )
+                .await;
+            return;
+        }
+
+        let proposal = LexiconProposal {
+            term: term.clone(),
+            weight: weight as f32,
+            rationale: String::new(),
+            source_ids: vec![],
+        };
+
+        match LexiconAppender::new(path.clone()).append(&proposal) {
+            Ok(()) => {
+                let _ = cmd
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .content(format!("Added \"{term}\" ({weight}) to the lexicon.")),
+                        ),
+                    )
+                    .await;
+            }
+            Err(e) => {
+                error!("lexicon append failed: {e}");
+                let _ = cmd
+                    .create_response(
+                        &ctx.http,
+                        CreateInteractionResponse::Message(
+                            CreateInteractionResponseMessage::new()
+                                .content("Failed to write to lexicon file — check logs."),
+                        ),
+                    )
+                    .await;
+            }
+        }
     }
 
     async fn resolve_thread(

@@ -12,7 +12,7 @@ The bot itself is persona-agnostic — its identity is entirely the `PERSONA` yo
 - **Two-tier memory.**
   - *Hot:* per-thread history in Redis (24h+ window).
   - *Long-term:* [context-forge](https://crates.io/crates/context-forge) (local SQLite + FTS5 BM25). Threads are distilled into a summary + facts and recalled into future threads, scoped to the server. Secrets are scrubbed before anything is stored, and retrieved memory is injected as clearly-labeled reference data, never as instructions.
-- **`!remember`.** Post `!remember` in a thread to distill it to long-term memory immediately and archive it.
+- **`/remember`.** Use `/remember` in a thread to distill it to long-term memory immediately and archive it.
 - **Web search (optional).** When a SearXNG instance is configured, the model invokes a search tool on its own when a query needs current information. Omit it and the bot runs fine without web search.
 - **Configurable persona.** The system prompt is the `PERSONA` env var — set it to whatever character or assistant you want.
 
@@ -91,6 +91,17 @@ PERSONA="You are a terse, dry assistant in a friends' Discord. Answer directly. 
 
 Update `.env` and `docker compose restart husk` to change it; no rebuild needed.
 
+### Persona lexicon (optional)
+
+Set `LEXICON_CONFIG` to a TOML file path. On startup, if the file doesn't exist the bot generates it automatically by asking the configured LLM to derive weighted terms from the `PERSONA`. The lexicon biases long-term memory recall toward domain-relevant entries.
+
+Add terms live with the `/lexicon add` slash command:
+
+```
+/lexicon add term:Battle-Sister weight:0.7
+/lexicon add term:Adeptus Mechanicus weight:1.0
+```
+
 ### Web search (optional)
 
 Web search is off unless `SEARXNG_URL` is set. To enable it you need a reachable
@@ -120,7 +131,7 @@ setup. Leave `SEARXNG_URL` unset and the bot starts normally with web search dis
 
 ### Discord permissions
 
-The bot's role needs **Send Messages**, **Create Public Threads**, and **Send Messages in Threads**, plus **Manage Threads** so `!remember` can archive a thread after committing it.
+The bot's role needs **Send Messages**, **Create Public Threads**, **Send Messages in Threads**, and **Use Application Commands**, plus **Manage Threads** so `/remember` can archive a thread after committing it.
 
 ## Build from source
 
