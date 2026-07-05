@@ -593,7 +593,9 @@ dependencies = [
 
 [[package]]
 name = "context-forge"
-version = "0.6.2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "649d0fc75094e6a421f49e3fe9c3cfb1a4cc1722b06db8421bcec54793119c00"
 dependencies = [
  "async-trait",
  "fastembed",
