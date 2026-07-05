@@ -361,7 +361,7 @@ impl Handler {
                 appender
                     .append(&LexiconProposal {
                         term: term.clone(),
-                        weight: weight as f32,
+                        weight,
                         rationale: None,
                         source_ids: vec![],
                     })
