@@ -676,3 +676,102 @@ fn strip_bot_mention(content: &str, bot_id: u64) -> String {
         .trim()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- strip_bot_mention ---
+
+    #[test]
+    fn strip_mention_standard() {
+        // The token is removed but internal whitespace is not collapsed — that's expected.
+        assert_eq!(strip_bot_mention("hello <@123> world", 123), "hello  world");
+    }
+
+    #[test]
+    fn strip_mention_nick_form() {
+        assert_eq!(strip_bot_mention("hey <@!123>", 123), "hey");
+    }
+
+    #[test]
+    fn strip_mention_ignores_other_id() {
+        assert_eq!(strip_bot_mention("ping <@999>", 123), "ping <@999>");
+    }
+
+    #[test]
+    fn strip_mention_trims_surrounding_whitespace() {
+        assert_eq!(strip_bot_mention("  <@123>  what time is it", 123), "what time is it");
+    }
+
+    // --- truncate ---
+
+    #[test]
+    fn truncate_short_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exactly_at_limit_unchanged() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_over_limit_gets_ellipsis() {
+        assert_eq!(truncate("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn truncate_trims_whitespace_before_measuring() {
+        assert_eq!(truncate("  hi  ", 10), "hi");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 5), "");
+    }
+
+    // --- HotSwapScorer ---
+
+    #[test]
+    fn hotswap_none_scores_zero() {
+        let scorer = HotSwapScorer(Arc::new(RwLock::new(None)));
+        let entry = ContextEntry {
+            id: "t".into(),
+            content: "for the emperor".into(),
+            timestamp: 0,
+            kind: "fact".into(),
+            scope: None,
+            session_id: None,
+            token_count: None,
+            metadata: None,
+        };
+        assert_eq!(scorer.score(&entry, ""), 0.0);
+    }
+
+    #[test]
+    fn hotswap_swap_is_visible_immediately() {
+        let inner = Arc::new(RwLock::new(None::<ConfigLexiconScorer>));
+        let scorer = HotSwapScorer(inner.clone());
+        let entry = ContextEntry {
+            id: "t".into(),
+            content: "for the emperor".into(),
+            timestamp: 0,
+            kind: "fact".into(),
+            scope: None,
+            session_id: None,
+            token_count: None,
+            metadata: None,
+        };
+
+        assert_eq!(scorer.score(&entry, ""), 0.0);
+
+        let loaded: ConfigLexiconScorer =
+            "[affirmations]\npatterns = [\"for the emperor\"]"
+                .parse()
+                .unwrap();
+        *inner.write().unwrap() = Some(loaded);
+
+        assert!(scorer.score(&entry, "") > 0.0);
+    }
+}

@@ -260,3 +260,33 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_bare_url_unchanged() {
+        assert_eq!(normalize_base_url("http://localhost:8080"), "http://localhost:8080");
+    }
+
+    #[test]
+    fn normalize_strips_trailing_slash() {
+        assert_eq!(normalize_base_url("http://localhost:8080/"), "http://localhost:8080");
+    }
+
+    #[test]
+    fn normalize_strips_v1_suffix() {
+        assert_eq!(normalize_base_url("http://localhost:8080/v1"), "http://localhost:8080");
+    }
+
+    #[test]
+    fn normalize_strips_v1_and_trailing_slash() {
+        assert_eq!(normalize_base_url("https://api.openai.com/v1/"), "https://api.openai.com");
+    }
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_base_url("  http://localhost:11434  "), "http://localhost:11434");
+    }
+}
