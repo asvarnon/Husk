@@ -35,8 +35,9 @@ impl LexiconScorer for HotSwapScorer {
 
 pub struct BotData {
     pub redis: Mutex<RedisState>,
-    /// OpenAI-compatible backend base URL (server root; `/v1` is appended). Runner-neutral —
-    /// Ollama, llama.cpp, LM Studio, etc.
+    /// OpenAI-compatible backend base URL, version path included (`.../v1`, or `.../api/paas/v4`
+    /// for Z.ai). Husk appends only `/chat/completions`. Runner-neutral — Ollama, llama.cpp,
+    /// LM Studio, OpenAI, Z.ai, etc.
     pub llm_base_url: String,
     pub llm_model: String,
     /// Optional bearer token for the chat endpoint. Local runners ignore it; the distiller

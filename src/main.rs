@@ -43,11 +43,13 @@ fn env_alias(primary: &str, alias: &str) -> Option<String> {
         .find(|v| !v.is_empty())
 }
 
-/// Reduce a configured base URL to the server root, so `{base}/v1...` always composes whether
-/// the user gave `http://host:8080` or the OpenAI-style `http://host:8080/v1`.
+/// Trim whitespace and trailing slashes from a configured base URL so that
+/// `{base}/chat/completions` composes cleanly. The base URL is the full OpenAI
+/// base *including* the version path — `.../v1` for OpenAI/Ollama/llama-server,
+/// `.../api/paas/v4` for Z.ai (GLM) — exactly as an OpenAI SDK's `baseURL`
+/// expects. Husk appends only `/chat/completions`; it does not assume `/v1`.
 fn normalize_base_url(raw: &str) -> String {
-    let trimmed = raw.trim().trim_end_matches('/');
-    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+    raw.trim().trim_end_matches('/').to_string()
 }
 
 #[tokio::main]
@@ -130,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
                     "stream": false
                 });
                 let mut req = http
-                    .post(format!("{llm_base_url}/v1/chat/completions"))
+                    .post(format!("{llm_base_url}/chat/completions"))
                     .json(&body);
                 if let Some(ref key) = llm_api_key {
                     req = req.bearer_auth(key);
@@ -198,15 +200,16 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(embedded, "backfill complete");
     }
 
-    // Distiller points at the SAME backend the bot chats with (its OpenAI-compat /v1 endpoint),
+    // Distiller points at the SAME backend the bot chats with (the same OpenAI-compat endpoint),
     // so distillation adds no infra and the model stays warm. Wrapped in a `ChunkingDistiller`:
     // the chunk budget is the caller's policy (deployment-specific — it's our host's RAM, not the
     // library's concern), so Husk supplies it here. The default `Structural` reduce keeps the
     // merge deterministic and model-free — no extra prompt, no extra OOM risk.
-    // `llm_base_url` is already normalized to the server root, so `{base}/v1` is the
-    // OpenAI-compat endpoint. Since context-forge 0.8.2 the distiller supports TLS (rustls) and
-    // bearer auth, so `LLM_API_KEY` applies to distillation too — a hosted https:// gateway works.
-    let mut inner = OpenAiCompatDistiller::new(format!("{llm_base_url}/v1"), llm_model.clone())?
+    // `llm_base_url` is the full OpenAI base (version path included); the distiller appends only
+    // `/chat/completions`, so we pass it verbatim — no `/v1` assumption here. Since context-forge
+    // 0.8.2 the distiller supports TLS (rustls) and bearer auth, so `LLM_API_KEY` applies to
+    // distillation too — a hosted https:// gateway works.
+    let mut inner = OpenAiCompatDistiller::new(llm_base_url.clone(), llm_model.clone())?
         .with_timeout_secs(DISTILL_TIMEOUT_SECS);
     if let Some(ref key) = llm_api_key {
         inner = inner.with_api_key(key.as_str());
@@ -289,18 +292,28 @@ mod tests {
     }
 
     #[test]
-    fn normalize_strips_v1_suffix() {
+    fn normalize_preserves_v1_version_path() {
+        // The version segment is part of the base URL and must NOT be stripped.
         assert_eq!(
             normalize_base_url("http://localhost:8080/v1"),
-            "http://localhost:8080"
+            "http://localhost:8080/v1"
         );
     }
 
     #[test]
-    fn normalize_strips_v1_and_trailing_slash() {
+    fn normalize_preserves_version_path_and_strips_only_trailing_slash() {
         assert_eq!(
             normalize_base_url("https://api.openai.com/v1/"),
-            "https://api.openai.com"
+            "https://api.openai.com/v1"
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_non_v1_version_path() {
+        // Z.ai (GLM) serves on /api/paas/v4 — no /v1 anywhere.
+        assert_eq!(
+            normalize_base_url("https://api.z.ai/api/paas/v4"),
+            "https://api.z.ai/api/paas/v4"
         );
     }
 
