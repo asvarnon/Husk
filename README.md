@@ -71,7 +71,7 @@ All via environment variables (see `.env.example`). All are required except `LLM
 | `DISCORD_TOKEN` | Bot token from the Discord Developer Portal |
 | `LLM_BASE_URL` | OpenAI-compatible backend base URL, e.g. `http://host.docker.internal:11434` (Ollama), `http://host:8080` (llama.cpp `llama-server`), `http://host:1234` (LM Studio). Give the server root or a `…/v1` URL — both work. Use `http://` for the local case (the distiller ships no TLS — see note). |
 | `LLM_MODEL` | Model name — used for both chat and distillation. e.g. `gemma2:latest` (Ollama), or the model id your runner reports. |
-| `LLM_API_KEY` | Optional. Bearer token for the chat endpoint (LM Studio / hosted gateways). Local runners (Ollama, llama.cpp) ignore it. **Chat only** — the distiller has no auth. |
+| `LLM_API_KEY` | Optional. Bearer token for hosted gateways (OpenAI, LM Studio, …). Local runners (Ollama, llama.cpp) ignore it. Applies to **both** chat and distillation. |
 | `REDIS_URL` | Redis connection string, e.g. `redis://redis:6379` |
 | `SEARXNG_URL` | Optional. SearXNG JSON search endpoint, e.g. `http://<host>:8888/search`. Omit to disable web search (see [Web search](#web-search-optional)). |
 | `PERSONA` | Full system prompt (multiline, double-quoted in `.env`) — the bot's identity |
@@ -79,7 +79,7 @@ All via environment variables (see `.env.example`). All are required except `LLM
 
 > **Backend-agnostic.** Husk talks to any OpenAI-compatible runner over `/v1/chat/completions`. Switch backends by changing `LLM_BASE_URL` / `LLM_MODEL` and restarting — no rebuild. The legacy `OLLAMA_HOST` / `OLLAMA_MODEL` names still work as aliases (`LLM_*` wins if both are set).
 >
-> **Distiller caveat:** long-term-memory distillation uses the same backend but over a no-TLS, no-auth client, so it needs a local `http://` endpoint. If you point chat at an authenticated/HTTPS gateway via `LLM_API_KEY`, distillation against that same gateway won't work until the underlying library gains TLS + auth.
+> **Distillation backend:** long-term-memory distillation reuses the same backend and endpoint as chat. As of context-forge 0.8.2 the distiller supports TLS (rustls) and bearer auth, so an authenticated `https://` gateway (e.g. OpenAI) works — `LLM_API_KEY` is sent on distillation requests too.
 
 ### Persona
 

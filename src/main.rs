@@ -204,10 +204,13 @@ async fn main() -> anyhow::Result<()> {
     // library's concern), so Husk supplies it here. The default `Structural` reduce keeps the
     // merge deterministic and model-free — no extra prompt, no extra OOM risk.
     // `llm_base_url` is already normalized to the server root, so `{base}/v1` is the
-    // OpenAI-compat endpoint. NOTE: the distiller ships no TLS and no auth — it needs a local,
-    // unauthenticated http:// endpoint. `LLM_API_KEY` therefore applies to chat only.
-    let inner = OpenAiCompatDistiller::new(format!("{llm_base_url}/v1"), llm_model.clone())?
+    // OpenAI-compat endpoint. Since context-forge 0.8.2 the distiller supports TLS (rustls) and
+    // bearer auth, so `LLM_API_KEY` applies to distillation too — a hosted https:// gateway works.
+    let mut inner = OpenAiCompatDistiller::new(format!("{llm_base_url}/v1"), llm_model.clone())?
         .with_timeout_secs(DISTILL_TIMEOUT_SECS);
+    if let Some(ref key) = llm_api_key {
+        inner = inner.with_api_key(key.as_str());
+    }
     let distiller = Arc::new(ChunkingDistiller::new(inner, DISTILL_CHUNK_CHARS));
 
     let redis_state = RedisState::connect(&redis_url).await?;
