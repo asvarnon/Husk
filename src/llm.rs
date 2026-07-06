@@ -159,7 +159,7 @@ pub async fn run_chat(
     memory_block: Option<&str>,
     api_key: Option<&str>,
 ) -> Result<String> {
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut messages = build_messages(history, system_prompt, memory_block);
 
     // Only advertise web_search when SearXNG is configured, so the model never calls a tool
