@@ -7,8 +7,11 @@ use crate::redis::StoredMessage;
 // Circuit breaker on the tool-calling cycle: each iteration is one model round-trip, looping
 // only when the model requests tools (it reads the results next round). A model that never
 // settles on a final answer — endlessly calling tools — would otherwise loop forever, so cap
-// the rounds and error out. Normal replies finish in 1-2 rounds, well under this.
-const MAX_TOOL_ROUNDS: usize = 5;
+// the rounds. On the LAST round we send `tool_choice: "none"` to force a text answer from what
+// the model has already gathered, so an over-eager model produces a reply instead of erroring
+// the user out. Normal replies finish in 1-2 rounds; eager reasoning models (e.g. GLM-5.2) can
+// fan out many exploratory searches, so this leaves several free rounds before the forced answer.
+const MAX_TOOL_ROUNDS: usize = 6;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessage {
@@ -56,6 +59,10 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage>,
     tools: Vec<serde_json::Value>,
+    // On the final tool round this is set to "none" to force the model to stop calling tools and
+    // answer. Omitted on normal rounds so the default ("auto") lets it use tools freely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'a str>,
     stream: bool,
 }
 
@@ -169,11 +176,17 @@ pub async fn run_chat(
         None => vec![],
     };
 
-    for _ in 0..MAX_TOOL_ROUNDS {
+    for round in 0..MAX_TOOL_ROUNDS {
+        // Last permitted round: forbid further tool calls so the model must produce a final
+        // answer from the results it already has, instead of looping into the iteration cap.
+        // Only meaningful when tools are advertised; skip it when SearXNG is unconfigured so we
+        // never send `tool_choice` with an empty `tools` array (some servers reject that).
+        let force_answer = round + 1 == MAX_TOOL_ROUNDS && !tools.is_empty();
         let req = ChatRequest {
             model,
             messages: messages.clone(),
             tools: tools.clone(),
+            tool_choice: if force_answer { Some("none") } else { None },
             stream: false,
         };
 
