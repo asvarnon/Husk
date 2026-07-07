@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 use crate::redis::StoredMessage;
 
@@ -102,9 +103,14 @@ fn build_messages(
     system_prompt: &str,
     memory_block: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let current_time = chrono::Utc::now().to_rfc3339();
+    let system_prompt = format!(
+        "{system_prompt}\n\nRuntime context: current UTC date/time is {current_time}. For current weather, news, prices, releases, or any other time-sensitive fact, use tool data rather than memory or model priors. Treat retrieved memory as historical context only; if a search result's date conflicts with the current date, call it stale instead of presenting it as current."
+    );
+
     let mut msgs = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(system_prompt.to_string()),
+        content: Some(system_prompt),
         tool_calls: None,
         tool_call_id: None,
         reasoning_content: None,
@@ -168,6 +174,13 @@ pub async fn run_chat(
 ) -> Result<String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut messages = build_messages(history, system_prompt, memory_block);
+    tracing::debug!(
+        model,
+        base_url,
+        history_len = history.len(),
+        memory_chars = memory_block.map(str::len).unwrap_or(0),
+        "starting chat completion"
+    );
 
     // Only advertise web_search when SearXNG is configured, so the model never calls a tool
     // that isn't available.
@@ -191,19 +204,37 @@ pub async fn run_chat(
         };
 
         // Diagnostic: the exact wire body, to diff against a known-good curl when a runner's
-        // chat template misbehaves. Serialized only when DEBUG is on, so prod pays nothing.
-        if tracing::enabled!(tracing::Level::DEBUG) {
+        // chat template misbehaves. This includes retrieved memory and user content, so it is
+        // gated by an explicit env var instead of normal DEBUG logging.
+        if std::env::var("HUSK_LOG_LLM_BODY").as_deref() == Ok("1")
+            && tracing::enabled!(tracing::Level::DEBUG)
+        {
             if let Ok(body) = serde_json::to_string(&req) {
                 tracing::debug!("LLM request body: {body}");
             }
         }
 
+        tracing::debug!(
+            round = round + 1,
+            max_rounds = MAX_TOOL_ROUNDS,
+            message_count = req.messages.len(),
+            tools_advertised = req.tools.len(),
+            force_answer,
+            "sending LLM request"
+        );
+
         // Attach the bearer token only when configured — local runners need no auth.
+        let started = Instant::now();
         let mut request = client.post(&url).json(&req);
         if let Some(key) = api_key {
             request = request.bearer_auth(key);
         }
         let resp: ChatResponse = request.send().await?.json().await?;
+        tracing::debug!(
+            round = round + 1,
+            elapsed_ms = started.elapsed().as_millis(),
+            "received LLM response"
+        );
 
         let choice = resp
             .choices
@@ -237,6 +268,12 @@ pub async fn run_chat(
                 );
                 return Err(anyhow!("model returned an empty response"));
             }
+            tracing::debug!(
+                round = round + 1,
+                finish_reason = ?finish_reason,
+                response_chars = content.chars().count(),
+                "LLM produced final answer"
+            );
             return Ok(content);
         }
 
@@ -263,7 +300,18 @@ pub async fn run_chat(
         // Answer EVERY call (a model may emit several in one turn), each linked back by its
         // tool_call_id. Dispatch is a hardcoded match for now — `web_search` is the only tool;
         // a general tool registry is tracked separately (see issue).
+        tracing::debug!(
+            round = round + 1,
+            tool_calls = tool_calls.len(),
+            "LLM requested tool calls"
+        );
+
         for call in tool_calls {
+            tracing::debug!(
+                tool_call_id = %call.id,
+                tool_name = %call.function.name,
+                "dispatching tool call"
+            );
             if call.function.name != "web_search" {
                 return Err(anyhow!(
                     "model requested unknown tool '{}'",
@@ -285,7 +333,14 @@ pub async fn run_chat(
             let results = match searxng_url {
                 Some(searxng_url) => {
                     tracing::info!("web_search: query={:?} model={}", query, model);
-                    crate::search::web_search(client, searxng_url, &query).await?
+                    let started = Instant::now();
+                    let results = crate::search::web_search(client, searxng_url, &query).await?;
+                    tracing::debug!(
+                        elapsed_ms = started.elapsed().as_millis(),
+                        result_chars = results.chars().count(),
+                        "web_search completed"
+                    );
+                    results
                 }
                 None => {
                     tracing::warn!("web_search called but SearXNG is not configured");

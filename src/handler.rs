@@ -830,4 +830,63 @@ mod tests {
 
         assert!(scorer.score(&entry, "") > 0.0);
     }
+
+    #[tokio::test]
+    async fn cawl_persona_lexicon_keeps_high_signal_ruins_memory_first() {
+        let persona: ConfigLexiconScorer = r#"
+[terms]
+"ruins" = 1.0
+"Cawl" = 0.8
+
+[affirmations]
+patterns = ["Immediate Next Step", "Primary"]
+"#
+        .parse()
+        .unwrap();
+
+        let cf = ContextForge::builder(context_forge::Config::default())
+            .with_default_english_scorer()
+            .with_persona_scorer(persona)
+            .build()
+            .await
+            .unwrap();
+
+        let opts = SaveOptions::default();
+        let neutral_id = cf
+            .save(
+                "routine logistics note: replenish the ink stores",
+                context_forge::kind::FACT,
+                &opts,
+            )
+            .await
+            .unwrap();
+        let high_signal_id = cf
+            .save(
+                "Immediate Next Step: have Cawl survey the ruins before dawn. Primary objective is artifact recovery.",
+                context_forge::kind::FACT,
+                &SaveOptions {
+                    metadata: Some(serde_json::json!({ "fact_kind": "Primary" })),
+                    ..SaveOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let hits = cf
+            .query(context_forge::MATCH_ALL_QUERY, None, 10_000)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, high_signal_id);
+        assert_eq!(
+            hits[0]
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("fact_kind"))
+                .and_then(|v| v.as_str()),
+            Some("Primary")
+        );
+        assert_eq!(hits[1].id, neutral_id);
+    }
 }

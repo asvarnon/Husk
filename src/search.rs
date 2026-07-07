@@ -15,16 +15,22 @@ struct SearxHit {
 }
 
 pub async fn web_search(client: &Client, base_url: &str, query: &str) -> Result<String> {
-    let resp: SearxResults = client
+    tracing::debug!(base_url, query, "sending SearXNG request");
+    let response = client
         .get(base_url)
         .query(&[("q", query), ("format", "json")])
         .send()
-        .await?
-        .json()
         .await?;
+    let status = response.status();
+    tracing::debug!(%status, "received SearXNG response");
+    let resp: SearxResults = response.json().await?;
+    tracing::debug!(hits = resp.results.len(), "parsed SearXNG results");
 
+    let searched_at = chrono::Utc::now().to_rfc3339();
     if resp.results.is_empty() {
-        return Ok("No results found.".to_string());
+        return Ok(format!(
+            "Search performed at {searched_at} UTC. No results found."
+        ));
     }
 
     let formatted = resp
@@ -42,5 +48,7 @@ pub async fn web_search(client: &Client, base_url: &str, query: &str) -> Result<
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    Ok(formatted)
+    Ok(format!(
+        "Search performed at {searched_at} UTC. Results are search snippets and may contain stale page dates; do not present stale dates as current.\n\n{formatted}"
+    ))
 }

@@ -27,4 +27,5 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 async-trait = "0.1"
-context-forge = { version = "0.8.2", features = ["distill-http", "semantic"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+context-forge = { version = "0.9.0", features = ["distill-http", "semantic"] }
