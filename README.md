@@ -76,10 +76,15 @@ All via environment variables (see `.env.example`). All are required except `LLM
 | `SEARXNG_URL` | Optional. SearXNG JSON search endpoint, e.g. `http://<host>:8888/search`. Omit to disable web search (see [Web search](#web-search-optional)). |
 | `PERSONA` | Full system prompt (multiline, double-quoted in `.env`) — the bot's identity |
 | `CONTEXT_FORGE_DB` | Optional. Long-term memory SQLite path. Defaults to `~/.context-forge/discord.db`. **Point it at a mounted volume or memory resets on every redeploy.** |
+| `LEXICON_CONFIG` | Optional. Persona/domain lexicon TOML path. If set and missing, Husk bootstraps it from `PERSONA` on startup. |
+| `CONTEXT_FORGE_ENGLISH_LEXICON` | Optional. `true` enables context-forge's generic English importance scorer. Defaults to `false`. |
+| `CONTEXT_FORGE_PERSONA_LEXICON` | Optional. `true` enables Husk's persona/domain scorer from `LEXICON_CONFIG`. Defaults to `true`. |
+| `RUST_LOG` | Optional. Tracing filter. A good default is `husk::llm=debug,husk::search=debug,husk=info,context_forge=info,turso_core=warn`. |
+| `HUSK_LOG_LLM_BODY` | Optional. Set `1` to log full LLM request bodies for debugging. Default `0`; dangerous because it logs prompt, user content, tool results, and retrieved memory. |
 
 > **Backend-agnostic.** Husk talks to any OpenAI-compatible runner. It appends `/chat/completions` to `LLM_BASE_URL`, so the base URL carries the version path itself (`…/v1` for OpenAI/Ollama/llama-server/LM Studio, `…/api/paas/v4` for Z.ai/GLM) — the same convention every OpenAI SDK uses. Switch backends by changing `LLM_BASE_URL` / `LLM_MODEL` and restarting — no rebuild. The legacy `OLLAMA_HOST` / `OLLAMA_MODEL` names still work as aliases (`LLM_*` wins if both are set).
 >
-> **Distillation backend:** long-term-memory distillation reuses the same backend and endpoint as chat. As of context-forge 0.8.2 the distiller supports TLS (rustls) and bearer auth, so an authenticated `https://` gateway (e.g. OpenAI) works — `LLM_API_KEY` is sent on distillation requests too.
+> **Distillation backend:** long-term-memory distillation reuses the same backend and endpoint as chat. As of context-forge 0.9.0 the distiller supports TLS (rustls) and bearer auth, so an authenticated `https://` gateway (e.g. OpenAI) works — `LLM_API_KEY` is sent on distillation requests too.
 
 ### Persona
 
@@ -94,6 +99,18 @@ Update `.env` and `docker compose restart husk` to change it; no rebuild needed.
 ### Persona lexicon (optional)
 
 Set `LEXICON_CONFIG` to a TOML file path. On startup, if the file doesn't exist the bot generates it automatically by asking the configured LLM to derive weighted terms from the `PERSONA`. The lexicon biases long-term memory recall toward domain-relevant entries — entries containing your persona's key nouns and speech patterns rank higher in the token-budget cut.
+
+Lexicon scoring is deliberate and switchable:
+
+```env
+# English/default scorer: generic commitment/decision/confirmation markers.
+CONTEXT_FORGE_ENGLISH_LEXICON=false
+
+# Persona/domain scorer: Cawl/domain lexicon from LEXICON_CONFIG.
+CONTEXT_FORGE_PERSONA_LEXICON=true
+```
+
+Combinations are independent: both `false` means pure relevance, English only enables generic markers, persona only enables the domain lexicon, and both `true` uses context-forge's additive composite scorer.
 
 **Model quality matters for the auto-bootstrap.** A small or low-reasoning local model will produce a sparse, poorly-weighted lexicon. If your wired model is weak, generate the file manually instead: the [context-forge lexicon bootstrapping guide](https://github.com/asvarnon/context-forge#bootstrapping-a-persona-lexicon-with-an-llm) has the full prompt template in a copy-paste block — substitute your `PERSONA`, run it through Claude, ChatGPT, or any capable model in a browser, and save the TOML response to your `LEXICON_CONFIG` path. The bot skips the auto-bootstrap if the file already exists, so a manually generated file is used as-is.
 
