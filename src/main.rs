@@ -52,6 +52,26 @@ fn normalize_base_url(raw: &str) -> String {
     raw.trim().trim_end_matches('/').to_string()
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            "" => default,
+            other => {
+                tracing::warn!(
+                    name,
+                    value = other,
+                    default,
+                    "invalid boolean env var; using default"
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -87,6 +107,8 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from);
+    let cf_english_lexicon = env_bool("CONTEXT_FORGE_ENGLISH_LEXICON", false);
+    let cf_persona_lexicon = env_bool("CONTEXT_FORGE_PERSONA_LEXICON", true);
 
     let http = reqwest::Client::new();
 
@@ -184,14 +206,21 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let live_scorer = Arc::new(RwLock::new(persona_scorer));
-    let cf = Arc::new(
-        ContextForge::builder(cf_config)
-            .with_default_english_scorer()
-            .with_embedding_model(&model_cache)
-            .with_persona_scorer(HotSwapScorer(live_scorer.clone()))
-            .build()
-            .await?,
+    // Accumulate optional scorer layers. Each builder method consumes the current builder and
+    // returns it with that scorer added, so enabling both flags keeps both layers.
+    let mut cf_builder = ContextForge::builder(cf_config).with_embedding_model(&model_cache);
+    if cf_english_lexicon {
+        cf_builder = cf_builder.with_default_english_scorer();
+    }
+    if cf_persona_lexicon {
+        cf_builder = cf_builder.with_persona_scorer(HotSwapScorer(live_scorer.clone()));
+    }
+    tracing::info!(
+        english_lexicon = cf_english_lexicon,
+        persona_lexicon = cf_persona_lexicon,
+        "context-forge lexicon scorer configuration"
     );
+    let cf = Arc::new(cf_builder.build().await?);
     let embedded = cf
         .backfill_embeddings(32, |done, total| {
             tracing::info!(done, total, "embedding backfill");

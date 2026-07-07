@@ -103,9 +103,14 @@ fn build_messages(
     system_prompt: &str,
     memory_block: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let current_time = chrono::Utc::now().to_rfc3339();
+    let system_prompt = format!(
+        "{system_prompt}\n\nRuntime context: current UTC date/time is {current_time}. For current weather, news, prices, releases, or any other time-sensitive fact, use tool data rather than memory or model priors. Treat retrieved memory as historical context only; if a search result's date conflicts with the current date, call it stale instead of presenting it as current."
+    );
+
     let mut msgs = vec![ChatMessage {
         role: "system".to_string(),
-        content: Some(system_prompt.to_string()),
+        content: Some(system_prompt),
         tool_calls: None,
         tool_call_id: None,
         reasoning_content: None,
@@ -199,8 +204,11 @@ pub async fn run_chat(
         };
 
         // Diagnostic: the exact wire body, to diff against a known-good curl when a runner's
-        // chat template misbehaves. Serialized only when DEBUG is on, so prod pays nothing.
-        if tracing::enabled!(tracing::Level::DEBUG) {
+        // chat template misbehaves. This includes retrieved memory and user content, so it is
+        // gated by an explicit env var instead of normal DEBUG logging.
+        if std::env::var("HUSK_LOG_LLM_BODY").as_deref() == Ok("1")
+            && tracing::enabled!(tracing::Level::DEBUG)
+        {
             if let Ok(body) = serde_json::to_string(&req) {
                 tracing::debug!("LLM request body: {body}");
             }
