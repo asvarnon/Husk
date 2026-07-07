@@ -186,6 +186,7 @@ async fn main() -> anyhow::Result<()> {
     let live_scorer = Arc::new(RwLock::new(persona_scorer));
     let cf = Arc::new(
         ContextForge::builder(cf_config)
+            .with_default_english_scorer()
             .with_embedding_model(&model_cache)
             .with_persona_scorer(HotSwapScorer(live_scorer.clone()))
             .build()

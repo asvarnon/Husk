@@ -15,13 +15,16 @@ struct SearxHit {
 }
 
 pub async fn web_search(client: &Client, base_url: &str, query: &str) -> Result<String> {
-    let resp: SearxResults = client
+    tracing::debug!(base_url, query, "sending SearXNG request");
+    let response = client
         .get(base_url)
         .query(&[("q", query), ("format", "json")])
         .send()
-        .await?
-        .json()
         .await?;
+    let status = response.status();
+    tracing::debug!(%status, "received SearXNG response");
+    let resp: SearxResults = response.json().await?;
+    tracing::debug!(hits = resp.results.len(), "parsed SearXNG results");
 
     if resp.results.is_empty() {
         return Ok("No results found.".to_string());

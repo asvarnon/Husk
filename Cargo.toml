@@ -27,4 +27,4 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 async-trait = "0.1"
-context-forge = { version = "0.8.2", features = ["distill-http", "semantic"] }
+context-forge = { path = "../context-forge", features = ["distill-http", "semantic"] }
